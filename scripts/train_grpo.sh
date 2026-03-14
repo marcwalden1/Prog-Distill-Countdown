@@ -1,13 +1,16 @@
 #!/bin/bash
-#SBATCH --gres=gpu:h100:4 # for 7B, use 8 GPUs
+#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:4
 #SBATCH -N 1 -n 1
-#SBATCH --mem-per-gpu=96G 
+#SBATCH --mem-per-gpu=96G
 #SBATCH --cpus-per-gpu 8
 #SBATCH --output=logs/%x-%A-%a.out
 #SBATCH -t 24:00:00
 #SBATCH --array 1-1
+#SBATCH --partition=kempner_h100
+#SBATCH --account=kempner_kdbrantley_lab
 
-conda activate verl
+source /n/home06/mwalden/.conda/etc/profile.d/conda.sh
+conda activate verl2
 
 export WANDB_MODE="offline"
 
@@ -26,6 +29,9 @@ test_path=../data/${data_source}/test.parquet
 output_dir=${CHECKPOINT_PATH:-${checkpoint_dir}/checkpoints/${model_name}}
 
 N_GPUS="$(( $(echo $SLURM_JOB_GPUS| grep -o , | wc -l) + 1 ))"
+
+ulimit -n 65536
+ray start --head --num-gpus=${N_GPUS} --temp-dir=/tmp/ray_${SLURM_JOB_ID}
 
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
@@ -81,3 +87,5 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.free_cache_engine=True
 
 chmod -R 770 ${output_dir}/${exp_name}
+
+ray stop
