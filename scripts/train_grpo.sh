@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:4
+#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:4 # for 7B, use 8 GPUs
 #SBATCH -N 1 -n 1
 #SBATCH --mem-per-gpu=96G
 #SBATCH --cpus-per-gpu 8
@@ -9,14 +9,17 @@
 #SBATCH --partition=kempner_h100
 #SBATCH --account=kempner_kdbrantley_lab
 
-source /n/home06/mwalden/.conda/etc/profile.d/conda.sh
-conda activate verl2
+module load Miniforge3/26.1.0-fasrc01
+source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
+conda activate verl
 
 export WANDB_MODE="offline"
+export RAY_DISABLE_DASHBOARD=1
+export PYTHONPATH=/n/home06/mwalden/.local/lib/python3.10/site-packages:${PYTHONPATH}
 
 project_dir=${PROJECT_DIR:-$PWD}
 cd ${project_dir}/verl
-checkpoint_dir=${CHECKPOINT_DIR:-${project_dir}}
+checkpoint_dir=${CHECKPOINT_DIR:-/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints}
 
 model_name=${MODEL_NAME:-Qwen2.5-1.5B}
 data_source=${DATA_SOURCE:-balanced}
@@ -43,7 +46,7 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation=left \
     +data.seed=${SLURM_ARRAY_TASK_ID} \
-    actor_rollout_ref.model.path=${project_dir}/models/${model_name} \
+    actor_rollout_ref.model.path=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models/${model_name} \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
