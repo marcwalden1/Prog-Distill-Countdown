@@ -3,6 +3,8 @@
 #SBATCH --output=logs/%x-%A-%a.out
 #SBATCH -t 03:00:00
 
+module load Miniforge3/26.1.0-fasrc01
+source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
 conda activate verl
 
 project_dir=${PROJECT_DIR:-$PWD}
@@ -17,7 +19,7 @@ for CURRENT_INDEX in $(seq 50 50 1600)
 do
     echo "--> Starting sub-task: Model=${model_name}, Exp_Name=${exp_name}, Index=${CURRENT_INDEX}"
 
-    python analyze.py \
+    python3 analyze.py \
         --result_dir ${result_dir} \
         --base_model ${model_name} \
         --exp_name ${exp_name} \

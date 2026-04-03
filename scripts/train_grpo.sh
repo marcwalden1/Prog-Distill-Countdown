@@ -33,6 +33,21 @@ output_dir=${CHECKPOINT_PATH:-${checkpoint_dir}/checkpoints/${model_name}}
 
 N_GPUS="$(( $(echo $SLURM_JOB_GPUS| grep -o , | wc -l) + 1 ))"
 
+echo "============================================================"
+echo "EXPERIMENT CONFIG"
+echo "Date:             $(date)"
+echo "SLURM Job ID:     ${SLURM_JOB_ID}"
+echo "SLURM Array ID:   ${SLURM_ARRAY_TASK_ID}"
+echo "Node:             $(hostname)"
+echo "GPUs:             ${N_GPUS}"
+echo "Model:            ${model_name}"
+echo "Exp name:         ${exp_name}"
+echo "Data source:      ${data_source}"
+echo "Max length:       ${max_length}"
+echo "Checkpoint path:  ${output_dir}/${exp_name}"
+echo "Project dir:      ${project_dir}"
+echo "============================================================"
+
 ulimit -n 65536
 ray start --head --num-gpus=${N_GPUS} --temp-dir=/tmp/ray_${SLURM_JOB_ID}
 
@@ -64,6 +79,9 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.n=4 \
+    actor_rollout_ref.rollout.val_kwargs.n=4 \
+    actor_rollout_ref.rollout.val_kwargs.do_sample=True \
+    actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=64 \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \

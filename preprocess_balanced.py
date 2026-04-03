@@ -76,6 +76,17 @@ if __name__ == '__main__':
         test_dataset += data[:10]
 
     train_dataset = Dataset.from_list(train_dataset)
+
+    # Deduplicate by (sorted nums, target) - keep first occurrence
+    seen = set()
+    deduped = []
+    for item in test_dataset:
+        key = (tuple(sorted(item['nums'])), item['target'])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+    test_dataset = deduped
+
     test_dataset = Dataset.from_list(test_dataset)
     
     train_dataset = train_dataset.map(function=make_map_fn('train'), with_indices=True)
@@ -93,6 +104,16 @@ if __name__ == '__main__':
             data = json.load(f)
         test_dataset += data[:10]
 
+    # Deduplicate by (sorted nums, target) - keep first occurrence
+    seen = set()
+    deduped = []
+    for item in test_dataset:
+        key = (tuple(sorted(item['nums'])), item['target'])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+    test_dataset = deduped
+
     test_dataset = Dataset.from_list(test_dataset)
     test_dataset = test_dataset.map(function=make_map_fn('test'), with_indices=True)
     local_dir = os.path.join(args.local_dir, "balanced5")
@@ -104,6 +125,16 @@ if __name__ == '__main__':
         with open(f"data/countdown_6_pattern_{i}.json") as f:
             data = json.load(f)
         test_dataset += data[:1]
+
+    # Deduplicate by (sorted nums, target) - keep first occurrence
+    seen = set()
+    deduped = []
+    for item in test_dataset:
+        key = (tuple(sorted(item['nums'])), item['target'])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+    test_dataset = deduped
 
     test_dataset = Dataset.from_list(test_dataset)
     test_dataset = test_dataset.map(function=make_map_fn('test'), with_indices=True)
