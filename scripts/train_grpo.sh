@@ -6,16 +6,18 @@
 #SBATCH --output=logs/%x-%A-%a.out
 #SBATCH -t 24:00:00
 #SBATCH --array 1-1
-#SBATCH --partition=kempner_h100
-#SBATCH --account=kempner_kdbrantley_lab
+# Set SBATCH_ACCOUNT and SBATCH_PARTITION in your shell env (e.g. ~/.rl_skill_comp_env sourced from ~/.bashrc)
 
 module load Miniforge3/26.1.0-fasrc01
 source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
 conda activate verl
 
+# Source personal config if it exists (sets MODEL_DIR, CHECKPOINT_DIR, etc.)
+[ -f ~/.rl_skill_comp_env ] && source ~/.rl_skill_comp_env
+
 export WANDB_MODE="offline"
 export RAY_DISABLE_DASHBOARD=1
-export PYTHONPATH=/n/home06/mwalden/.local/lib/python3.10/site-packages:${PYTHONPATH}
+export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 
 project_dir=${PROJECT_DIR:-$PWD}
 cd ${project_dir}/verl
@@ -26,6 +28,7 @@ data_source=${DATA_SOURCE:-balanced}
 exp_name=${EXP_NAME:-${data_source}-grpo-seed${SLURM_ARRAY_TASK_ID}}
 
 max_length=${MAX_LENGTH:-1024}
+kl_loss_coef=${KL_LOSS_COEF:-0.001}
 train_path=../data/${data_source}/train.parquet
 test_path=../data/${data_source}/test.parquet
 
@@ -61,13 +64,13 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation=left \
     +data.seed=${SLURM_ARRAY_TASK_ID} \
-    actor_rollout_ref.model.path=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models/${model_name} \
+    actor_rollout_ref.model.path=${MODEL_DIR}/${model_name} \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16 \
     actor_rollout_ref.actor.use_kl_loss=True \
-    actor_rollout_ref.actor.kl_loss_coef=0.001 \
+    actor_rollout_ref.actor.kl_loss_coef=${kl_loss_coef} \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.actor.loss_agg_mode=token-mean \

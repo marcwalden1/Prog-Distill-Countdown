@@ -7,11 +7,12 @@ module load Miniforge3/26.1.0-fasrc01
 source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
 conda activate verl
 
-export PYTHONPATH=/n/home06/mwalden/.local/lib/python3.10/site-packages:${PYTHONPATH}
+[ -f ~/.rl_skill_comp_env ] && source ~/.rl_skill_comp_env
+export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 
 project_dir=${PROJECT_DIR:-$PWD}
 result_dir=${RESULT_DIR:-${project_dir}}
-checkpoint_dir=${CHECKPOINT_DIR:-/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints}
+checkpoint_dir=${CHECKPOINT_DIR:-}
 
 model_name=${MODEL_NAME:-Qwen2.5-1.5B}
 exp_name=${EXP_NAME:-balanced-grpo-seed1}

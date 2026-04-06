@@ -9,6 +9,9 @@
 
 conda activate verl
 
+# Source personal config if it exists (sets MODEL_DIR, CHECKPOINT_DIR, etc.)
+[ -f ~/.rl_skill_comp_env ] && source ~/.rl_skill_comp_env
+
 export WANDB_MODE="offline"
 
 project_dir=${PROJECT_DIR:-$PWD}
@@ -37,7 +40,7 @@ python3 -m verl.trainer.main_ppo \
     data.filter_overlong_prompts=True \
     data.truncation=left \
     +data.seed=${SLURM_ARRAY_TASK_ID} \
-    actor_rollout_ref.model.path=${project_dir}/models/${model_name} \
+    actor_rollout_ref.model.path=${MODEL_DIR}/${model_name} \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
@@ -60,7 +63,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \
     critic.optim.lr=1e-5 \
-    critic.model.path=${project_dir}/models/${model_name} \
+    critic.model.path=${MODEL_DIR}/${model_name} \
     critic.ppo_micro_batch_size_per_gpu=8 \
     trainer.val_before_train=True \
     trainer.critic_warmup=0 \
