@@ -8,7 +8,7 @@
 #SBATCH -t 01:30:00
 #SBATCH --array 1-32
 
-module load Miniforge3/26.1.0-fasrc01
+module load Miniforge3/26.1.0-fasrc01 cuda/12.4.1-fasrc01
 source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
 conda activate verl
 

@@ -8,7 +8,7 @@
 #SBATCH --array 1-1
 # Set SBATCH_ACCOUNT and SBATCH_PARTITION in your shell env (e.g. ~/.rl_skill_comp_env sourced from ~/.bashrc)
 
-module load Miniforge3/26.1.0-fasrc01
+module load Miniforge3/26.1.0-fasrc01 cuda/12.4.1-fasrc01
 source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
 conda activate verl
 
