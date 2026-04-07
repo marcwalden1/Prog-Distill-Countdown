@@ -77,16 +77,16 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=64 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=128 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.85 \
     actor_rollout_ref.rollout.n=4 \
     actor_rollout_ref.rollout.val_kwargs.n=4 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=64 \
-    actor_rollout_ref.ref.fsdp_config.param_offload=True \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=128 \
+    actor_rollout_ref.ref.fsdp_config.param_offload=False \
     algorithm.use_kl_in_reward=False \
     algorithm.norm_adv_by_std_in_grpo=False \
     trainer.val_before_train=True \
@@ -101,14 +101,14 @@ python3 -m verl.trainer.main_ppo \
     trainer.rollout_data_dir=${output_dir}/${exp_name} \
     trainer.project_name=countdown \
     trainer.experiment_name=${model_name}-${exp_name} \
-    trainer.balance_batch=False \
+    trainer.balance_batch=True \
     custom_reward_function.path=../grader_utils.py \
     actor_rollout_ref.ref.strategy=fsdp2 \
     actor_rollout_ref.actor.strategy=fsdp2 \
     critic.strategy=fsdp2 \
     reward_model.strategy=fsdp2 \
     actor_rollout_ref.rollout.enforce_eager=False \
-    actor_rollout_ref.rollout.free_cache_engine=True
+    actor_rollout_ref.rollout.free_cache_engine=False
 
 chmod -R 770 ${output_dir}/${exp_name}
 
