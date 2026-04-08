@@ -29,6 +29,7 @@ exp_name=${EXP_NAME:-${data_source}-grpo-seed${SLURM_ARRAY_TASK_ID}}
 
 max_length=${MAX_LENGTH:-1024}
 kl_loss_coef=${KL_LOSS_COEF:-0.001}
+actor_lr=${ACTOR_LR:-1e-6}
 train_path=../data/${data_source}/train.parquet
 test_path=../data/${data_source}/test.parquet
 
@@ -65,7 +66,7 @@ python3 -m verl.trainer.main_ppo \
     data.truncation=left \
     +data.seed=${SLURM_ARRAY_TASK_ID} \
     actor_rollout_ref.model.path=${MODEL_DIR}/${model_name} \
-    actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.actor.optim.lr=${actor_lr} \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16 \
@@ -77,15 +78,15 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=128 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=64 \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.85 \
+    actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
     actor_rollout_ref.rollout.n=4 \
     actor_rollout_ref.rollout.val_kwargs.n=4 \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=128 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=64 \
     actor_rollout_ref.ref.fsdp_config.param_offload=False \
     algorithm.use_kl_in_reward=False \
     algorithm.norm_adv_by_std_in_grpo=False \
@@ -109,7 +110,10 @@ python3 -m verl.trainer.main_ppo \
     reward_model.strategy=fsdp2 \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=False
+TRAIN_EXIT_CODE=$?
 
 chmod -R 770 ${output_dir}/${exp_name}
 
 ray stop
+
+exit $TRAIN_EXIT_CODE
