@@ -179,42 +179,52 @@ Assistant: Let me solve this step by step.
 
 ---
 
-## Evaluation: scripts/eval.sh + eval.py
+## Running the pipeline: scripts/run_pipeline.sh
+
+**Always use this to launch a new experiment.** Submits train → eval → plot_results as a single SLURM dependency chain — no manual follow-up needed.
 
 ```bash
-export MODEL_NAME=Qwen2.5-1.5B
-export EXP_NAME=balanced-grpo-seed1
-sbatch --array=1-32 --dependency=afterok:${jobid} scripts/eval.sh
+# Standard run
+MODEL_NAME=Qwen2.5-1.5B EXP_NAME=balanced-grpo-seed1 bash scripts/run_pipeline.sh
+
+# With KL coef override
+MODEL_NAME=Qwen2.5-0.5B EXP_NAME=balanced-grpo-kl1e-4-seed1 KL_COEF=0.0001 bash scripts/run_pipeline.sh
+
+# 7B (needs 8 GPUs)
+MODEL_NAME=Qwen2.5-7B EXP_NAME=balanced-grpo-seed1 \
+  TRAIN_SBATCH_ARGS="--gres=gpu:nvidia_h100_80gb_hbm3:8 -t 30:00:00" \
+  bash scripts/run_pipeline.sh
 ```
 
-- Array index maps to checkpoint: `global_step_{50 * task_id}`
+This submits:
+1. `train_grpo.sh` — trains the model
+2. `eval.sh` × 3 datasets (`balanced`, `balanced5`, `balanced6`) — each as a 10-task array job, all pending on train
+3. `plot_results.sh` — pending on all 3 eval jobs completing
+
+**Scripts that are NEVER run:** `analyze.sh`, `analyze.py`, `gather_experiment.py`. Tables are produced manually on request.
+
+---
+
+## Evaluation: scripts/eval.sh + eval.py
+
+- Default array: `3,6,9,12,15,18,21,24,28,32` → evaluates checkpoints at steps 150, 300, 450, 600, 750, 900, 1050, 1200, 1400, 1600
 - Merges FSDP shards first (`verl.model_merger merge`)
 - Runs `eval.py` with vLLM, n=32 samples/prompt, temperature=0.6
 - Output: `results/{model}/{exp}/global_step_{N}/{dataset}_temp{T}_n{N}_max{M}.json`
 
 ---
 
-## Analysis: scripts/analyze.sh + analyze.py
+## Plotting: scripts/plot_results.sh + plot_results.py
 
-```bash
-export MODEL_NAME=Qwen2.5-1.5B
-export EXP_NAME=balanced-grpo-seed1
-sbatch --dependency=afterok:${jobid} scripts/analyze.sh
-```
-
-- No GPU needed (CPU only, 32 cores)
-- Iterates checkpoints 50–1600 in steps of 50
-- Scores outputs, extracts canonical patterns via `utils.py`
-- Caches annotated results as `{step}_annotated.json`
-
----
-
-## Canonical pattern system: utils.py + annotated_expressions.{json,txt}
-
-- `annotated_expressions.json` (5.3 MB): maps puzzle size → list of expressions with canonical form and pattern index
-- `annotated_expressions.txt` (1.9 MB): line-delimited JSON version
-- `solve(numbers, target)`: exhaustive solver using Fraction arithmetic
-- `extract_patterns(text, nums)`: extracts, validates, canonicalizes expressions from model output
+- CPU-only job on `serial_requeue`, 8 CPUs, 64GB RAM, 1h time limit
+- Produces **5 plots** per run in `figures/{model}/{exp}/`:
+  - `val_reward_vs_step.png` — val reward mean@4 vs. training step (from log)
+  - `eval_n34.png` — mean@1 + mean@32 vs. checkpoint (n=3,4)
+  - `eval_n5.png` — same for n=5
+  - `eval_n6.png` — same for n=6
+  - `response_length.png` — mean response length (tokens) vs. checkpoint, all 3 datasets
+- Uses `.scores` and `.lengths` cache files to avoid recomputing unchanged results
+- Scoring uses `Pool(8)` for parallelism; capped at 1000 prompts per file for n=5,6
 
 ---
 

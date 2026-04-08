@@ -99,10 +99,10 @@ def get_all_scores_and_patterns():
         filename = f"{RESULT_DIR}/global_step_{index}/{ANNOTATED_RESULT_FILENAME}"
         if os.path.exists(filename) and not args.overwrite:
             data = load_data(index, annotated=True)
-            curr_scores, curr_expressions, curr_patterns, ns = get_annotated_scores_and_patterns(data)
+            curr_scores, curr_expressions, curr_patterns = get_annotated_scores_and_patterns(data)
         else:
             data = load_data(index, annotated=False)
-            curr_scores, curr_expressions, curr_patterns, ns = get_scores_and_patterns(data)
+            curr_scores, curr_expressions, curr_patterns = get_scores_and_patterns(data)
             save_annotated_data(data, curr_scores, curr_expressions, curr_patterns, index)
 
         all_scores.append(curr_scores)

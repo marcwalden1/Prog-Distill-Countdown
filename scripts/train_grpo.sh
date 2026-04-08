@@ -26,6 +26,9 @@ data_source=${DATA_SOURCE:-balanced}
 exp_name=${EXP_NAME:-${data_source}-grpo-seed${SLURM_ARRAY_TASK_ID}}
 
 max_length=${MAX_LENGTH:-1024}
+kl_loss_coef=${KL_COEF:-0.001}
+lr=${LR:-1e-6}
+total_steps=${TOTAL_STEPS:-1635}
 train_path=../data/${data_source}/train.parquet
 test_path=../data/${data_source}/test.parquet
 
@@ -44,6 +47,9 @@ echo "Model:            ${model_name}"
 echo "Exp name:         ${exp_name}"
 echo "Data source:      ${data_source}"
 echo "Max length:       ${max_length}"
+echo "Learning rate:    ${lr}"
+echo "KL coef:          ${kl_loss_coef}"
+echo "Total steps:      ${total_steps}"
 echo "Checkpoint path:  ${output_dir}/${exp_name}"
 echo "Project dir:      ${project_dir}"
 echo "============================================================"
@@ -62,12 +68,12 @@ python3 -m verl.trainer.main_ppo \
     data.truncation=left \
     +data.seed=${SLURM_ARRAY_TASK_ID} \
     actor_rollout_ref.model.path=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models/${model_name} \
-    actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.actor.optim.lr=${lr} \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16 \
     actor_rollout_ref.actor.use_kl_loss=True \
-    actor_rollout_ref.actor.kl_loss_coef=0.001 \
+    actor_rollout_ref.actor.kl_loss_coef=${kl_loss_coef} \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.actor.entropy_coeff=0 \
     actor_rollout_ref.actor.loss_agg_mode=token-mean \
@@ -94,6 +100,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.save_freq=50 \
     trainer.test_freq=50 \
     trainer.total_epochs=1 \
+    trainer.total_training_steps=${total_steps} \
     trainer.default_local_dir=${output_dir}/${exp_name} \
     trainer.rollout_data_dir=${output_dir}/${exp_name} \
     trainer.project_name=countdown \

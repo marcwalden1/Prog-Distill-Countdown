@@ -1,6 +1,8 @@
 #!/bin/bash
+#SBATCH --partition=serial_requeue
+#SBATCH --account=kdbrantley_lab
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=16G
+#SBATCH --mem=64G
 #SBATCH --output=logs/%x-%A.out
 #SBATCH -t 01:00:00
 

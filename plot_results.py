@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+import time
 
 import matplotlib
 matplotlib.use("Agg")
@@ -52,6 +53,8 @@ def parse_args():
     parser.add_argument("--result_dir",   default="results")
     parser.add_argument("--log_dir",      default="logs")
     parser.add_argument("--figures_dir",  default="figures")
+    parser.add_argument("--model_base_dir",
+                        default="/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models")
     return parser.parse_args()
 
 
@@ -75,6 +78,137 @@ def load_val_reward_curve(log_dir, model_name, exp_name):
     ]
 
 
+def _score_item(args):
+    """Score one prompt's outputs. Top-level for multiprocessing pickling."""
+    outputs, target, nums = args
+    if not outputs:
+        return None
+    extra = {"numbers": nums}
+    s1 = compute_score(None, outputs[0], target, extra, verbose=False)
+    mean1 = float(s1 == 1.0)
+    scores = [compute_score(None, out, target, extra, verbose=False) for out in outputs]
+    mean32 = sum(scores) / len(scores)
+    return mean1, mean32
+
+
+MAX_PROMPTS = 1000  # cap per file to keep scoring fast
+
+
+def _score_checkpoint(path):
+    """Return (step, mean1, mean32) for one result file, using .scores cache if fresh."""
+    cache_path = path + ".scores"
+    try:
+        if os.path.getmtime(cache_path) >= os.path.getmtime(path):
+            with open(cache_path) as f:
+                cached = tuple(json.load(f))
+            print(f"    [cache hit]", flush=True)
+            return cached
+    except Exception:
+        pass
+
+    m = re.search(r"global_step_(\d+)", path)
+    if not m:
+        return None
+    step = int(m.group(1))
+
+    t_load = time.time()
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    print(f"    json load: {time.time()-t_load:.1f}s  ({len(data)} prompts in file)", flush=True)
+
+    if len(data) > MAX_PROMPTS:
+        data = data[:MAX_PROMPTS]
+        print(f"    truncated to {MAX_PROMPTS} prompts", flush=True)
+
+    items = [
+        (item["outputs"], item["target"], item["nums"])
+        for item in data if item.get("outputs")
+    ]
+    if not items:
+        return None
+
+    t_score = time.time()
+    from multiprocessing import Pool
+    with Pool(8) as pool:
+        scored = pool.map(_score_item, items)
+    print(f"    scoring {len(items)} prompts x32: {time.time()-t_score:.1f}s", flush=True)
+
+    scored = [s for s in scored if s is not None]
+    if not scored:
+        return None
+
+    n_prompts = len(scored)
+    sum1  = sum(s[0] for s in scored)
+    sum32 = sum(s[1] for s in scored)
+    result = (step, sum1 / n_prompts, sum32 / n_prompts)
+    try:
+        with open(cache_path, "w") as f:
+            json.dump(list(result), f)
+    except Exception:
+        pass
+    return result
+
+
+def _length_checkpoint(path, tokenizer):
+    """Return (step, mean_response_length_tokens) using .lengths cache."""
+    cache_path = path + ".lengths"
+    try:
+        if os.path.getmtime(cache_path) >= os.path.getmtime(path):
+            with open(cache_path) as f:
+                return tuple(json.load(f))
+    except Exception:
+        pass
+
+    m = re.search(r"global_step_(\d+)", path)
+    if not m:
+        return None
+    step = int(m.group(1))
+
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        return None
+
+    all_outputs = [out for item in data for out in item.get("outputs", [])]
+    if not all_outputs:
+        return None
+
+    encoded = tokenizer(all_outputs, add_special_tokens=False)["input_ids"]
+    mean_len = sum(len(ids) for ids in encoded) / len(encoded)
+
+    result = (step, mean_len)
+    try:
+        with open(cache_path, "w") as f:
+            json.dump(list(result), f)
+    except Exception:
+        pass
+    return result
+
+
+def compute_mean_lengths(result_dir, model_name, exp_name, eval_dataset, tokenizer):
+    """Return sorted list of (step, mean_tokens) for each checkpoint."""
+    pattern = os.path.join(
+        result_dir, model_name, exp_name,
+        "global_step_*",
+        f"{eval_dataset}_temp*.json",
+    )
+    files = glob.glob(pattern)
+    if not files:
+        return []
+
+    results = []
+    for path in sorted(files):
+        result = _length_checkpoint(path, tokenizer)
+        if result is not None:
+            results.append(result)
+    results.sort(key=lambda x: x[0])
+    return results
+
+
 def compute_mean_metrics(result_dir, model_name, exp_name, eval_dataset):
     """
     For each checkpoint step, compute mean@1 and mean@32.
@@ -83,6 +217,7 @@ def compute_mean_metrics(result_dir, model_name, exp_name, eval_dataset):
     mean@32 — average raw compute_score() across all 32 outputs per prompt, then across prompts
 
     Returns sorted list of (step, mean1, mean32), or [] if no results found.
+    Uses .scores cache files to avoid re-scoring unchanged result files.
     """
     pattern = os.path.join(
         result_dir, model_name, exp_name,
@@ -93,50 +228,17 @@ def compute_mean_metrics(result_dir, model_name, exp_name, eval_dataset):
     if not files:
         return []
 
-    devnull = open(os.devnull, "w")
     results = []
-
-    for path in files:
+    for path in sorted(files):
         m = re.search(r"global_step_(\d+)", path)
-        if not m:
-            continue
-        step = int(m.group(1))
+        label = f"step_{m.group(1)}" if m else path
+        print(f"  Scoring {label}...", end=" ", flush=True)
+        t0 = time.time()
+        result = _score_checkpoint(path)
+        if result is not None:
+            results.append(result)
+        print(f"{time.time() - t0:.1f}s", flush=True)
 
-        try:
-            with open(path) as f:
-                data = json.load(f)
-        except Exception:
-            continue
-
-        sum1 = sum32 = 0.0
-        n_prompts = 0
-
-        old_stdout = sys.stdout
-        sys.stdout = devnull
-        try:
-            for item in data:
-                outputs = item.get("outputs", [])
-                if not outputs:
-                    continue
-                target = item["target"]
-                extra  = {"numbers": item["nums"]}
-
-                # mean@1: binary score of first output
-                s1 = compute_score(None, outputs[0], target, extra)
-                sum1 += float(s1 == 1.0)
-
-                # mean@32: average raw score across all outputs
-                scores = [compute_score(None, out, target, extra) for out in outputs]
-                sum32 += sum(scores) / len(scores)
-
-                n_prompts += 1
-        finally:
-            sys.stdout = old_stdout
-
-        if n_prompts > 0:
-            results.append((step, sum1 / n_prompts, sum32 / n_prompts))
-
-    devnull.close()
     results.sort(key=lambda x: x[0])
     return results
 
@@ -162,6 +264,33 @@ def plot_val_reward(val_curve, model_name, exp_name, figures_dir):
     fig.savefig(out)
     plt.close(fig)
     print(f"  Saved: {out}")
+
+
+def plot_response_length(lengths_by_dataset, figures_dir, title_prefix):
+    """Plot mean response length vs. checkpoint step for all datasets on one figure."""
+    dataset_colors = {"n=3,4": COLOR_MEAN1, "n=5": COLOR_MEAN32, "n=6": COLOR_VAL}
+    has_data = any(v for v in lengths_by_dataset.values())
+    if not has_data:
+        print("  Skipping response length plot (no data)", flush=True)
+        return
+    plt.rcParams.update(STYLE)
+    fig, ax = plt.subplots(figsize=FIGSIZE)
+    for n_label, lengths in lengths_by_dataset.items():
+        if not lengths:
+            continue
+        xs, ys = zip(*lengths)
+        ax.plot(xs, ys, linewidth=LINEWIDTH, marker="o", markersize=MARKERSIZE,
+                color=dataset_colors[n_label], label=n_label)
+    ax.set_xlabel("Checkpoint step")
+    ax.set_ylabel("Mean response length (tokens)")
+    ax.set_title(f"Response length — {title_prefix}")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    out = os.path.join(figures_dir, "response_length.png")
+    fig.savefig(out)
+    plt.close(fig)
+    print(f"  Saved: {out}", flush=True)
 
 
 def plot_eval(metrics, n_label, out_path, title_prefix):
@@ -201,11 +330,11 @@ def main():
     os.makedirs(figures_dir, exist_ok=True)
 
     title_prefix = f"{model_name} / {exp_name}"
-    print(f"\nPlotting: {title_prefix}")
-    print("=" * 60)
+    print(f"\nPlotting: {title_prefix}", flush=True)
+    print("=" * 60, flush=True)
 
     # --- Plot 1: val reward vs. training step ---
-    print("\n[1] Val reward vs. training step...")
+    print("\n[1] Val reward vs. training step...", flush=True)
     val_curve = load_val_reward_curve(args.log_dir, model_name, exp_name)
     plot_val_reward(val_curve, model_name, exp_name, figures_dir)
 
@@ -217,16 +346,28 @@ def main():
     ]
 
     for dataset, n_label, fname in dataset_configs:
-        print(f"\n[eval] Dataset: {dataset} ({n_label})")
+        print(f"\n[eval] Dataset: {dataset} ({n_label})", flush=True)
         metrics = compute_mean_metrics(args.result_dir, model_name, exp_name, dataset)
         if not metrics:
-            print(f"  Skipping: no eval results found for {dataset}")
+            print(f"  Skipping: no eval results found for {dataset}", flush=True)
             continue
-        print(f"  Checkpoints found: {len(metrics)}")
+        print(f"  Checkpoints found: {len(metrics)}", flush=True)
         out = os.path.join(figures_dir, fname)
         plot_eval(metrics, n_label, out, title_prefix)
 
-    print("\nDone.")
+    # --- Plot 4: response length vs. checkpoint step ---
+    print(f"\n[length] Response length...", flush=True)
+    from transformers import AutoTokenizer
+    tokenizer_path = os.path.join(args.model_base_dir, model_name)
+    print(f"  Loading tokenizer from {tokenizer_path}", flush=True)
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
+    lengths_by_dataset = {
+        n_label: compute_mean_lengths(args.result_dir, model_name, exp_name, dataset, tokenizer)
+        for dataset, n_label, _ in dataset_configs
+    }
+    plot_response_length(lengths_by_dataset, figures_dir, title_prefix)
+
+    print("\nDone.", flush=True)
 
 
 if __name__ == "__main__":
