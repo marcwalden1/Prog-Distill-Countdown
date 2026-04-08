@@ -3,11 +3,11 @@
 #SBATCH -N 1 -n 1
 #SBATCH --mem-per-gpu=96G
 #SBATCH --cpus-per-gpu 8
-#SBATCH --partition=kempner_h100
+#SBATCH --partition=kempner_requeue
 #SBATCH --account=kempner_kdbrantley_lab
 #SBATCH --output=logs/%x-%A-%a.out
 #SBATCH -t 01:30:00
-#SBATCH --array 1-32
+#SBATCH --array 3,6,9,12,15,18,21,24,28,32
 
 module load Miniforge3/26.1.0-fasrc01
 source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
