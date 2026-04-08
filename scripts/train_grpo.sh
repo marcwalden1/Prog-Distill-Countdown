@@ -29,6 +29,7 @@ exp_name=${EXP_NAME:-${data_source}-grpo-seed${SLURM_ARRAY_TASK_ID}}
 
 max_length=${MAX_LENGTH:-1024}
 kl_loss_coef=${KL_LOSS_COEF:-0.001}
+actor_lr=${ACTOR_LR:-1e-6}
 train_path=../data/${data_source}/train.parquet
 test_path=../data/${data_source}/test.parquet
 
@@ -65,7 +66,7 @@ python3 -m verl.trainer.main_ppo \
     data.truncation=left \
     +data.seed=${SLURM_ARRAY_TASK_ID} \
     actor_rollout_ref.model.path=${MODEL_DIR}/${model_name} \
-    actor_rollout_ref.actor.optim.lr=1e-6 \
+    actor_rollout_ref.actor.optim.lr=${actor_lr} \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16 \
