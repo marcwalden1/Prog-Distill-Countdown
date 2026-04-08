@@ -13,10 +13,20 @@ module load Miniforge3/26.1.0-fasrc01
 source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
 conda activate verl
 
-export PYTHONPATH=/n/home06/mwalden/.local/lib/python3.10/site-packages:${PYTHONPATH}
+export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
+
+# User-specific default paths
+if [ "$USER" = "mwalden" ]; then
+    _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints
+elif [ "$USER" = "sdholakia" ]; then
+    _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/sdholakia/rl-checkpoints
+else
+    echo "ERROR: Unknown user $USER. Set CHECKPOINT_DIR explicitly." >&2
+    exit 1
+fi
 
 project_dir=${PROJECT_DIR:-$PWD}
-checkpoint_dir=${CHECKPOINT_DIR:-/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints}
+checkpoint_dir=${CHECKPOINT_DIR:-$_checkpoint_dir}
 result_dir=${RESULT_DIR:-${project_dir}}
 
 model_name=${MODEL_NAME:-Qwen2.5-1.5B}

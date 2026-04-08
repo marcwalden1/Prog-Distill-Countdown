@@ -10,7 +10,17 @@ module load Miniforge3/26.1.0-fasrc01
 source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
 conda activate verl
 
-export PYTHONPATH=/n/home06/mwalden/.local/lib/python3.10/site-packages:${PYTHONPATH}
+export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
+
+# User-specific default paths
+if [ "$USER" = "mwalden" ]; then
+    _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models
+elif [ "$USER" = "sdholakia" ]; then
+    _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/sdholakia/models
+else
+    echo "ERROR: Unknown user $USER. Set MODEL_DIR explicitly." >&2
+    exit 1
+fi
 
 project_dir=${PROJECT_DIR:-$PWD}
 result_dir=${RESULT_DIR:-${project_dir}/results}
@@ -21,8 +31,9 @@ model_name=${MODEL_NAME:-Qwen2.5-1.5B}
 exp_name=${EXP_NAME:-balanced-grpo-seed1}
 
 python3 ${project_dir}/plot_results.py \
-    --model_name  ${model_name} \
-    --exp_name    ${exp_name} \
-    --result_dir  ${result_dir} \
-    --log_dir     ${log_dir} \
-    --figures_dir ${figures_dir}
+    --model_name     ${model_name} \
+    --exp_name       ${exp_name} \
+    --result_dir     ${result_dir} \
+    --log_dir        ${log_dir} \
+    --figures_dir    ${figures_dir} \
+    --model_base_dir ${MODEL_DIR:-$_model_dir}
