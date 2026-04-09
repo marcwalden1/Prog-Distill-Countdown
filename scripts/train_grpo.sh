@@ -116,7 +116,7 @@ python3 -m verl.trainer.main_ppo \
     trainer.total_training_steps=${total_steps} \
     trainer.default_local_dir=${output_dir}/${exp_name} \
     trainer.rollout_data_dir=${output_dir}/${exp_name} \
-    trainer.project_name=countdown \
+    trainer.project_name=prog_distill \
     trainer.experiment_name=${model_name}-${exp_name} \
     trainer.balance_batch=False \
     custom_reward_function.path=../grader_utils.py \
