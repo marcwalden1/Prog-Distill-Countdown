@@ -37,7 +37,10 @@ EVAL_JID3=$(EVAL_DATASET=balanced6 sbatch --parsable --dependency=afterok:${TRAI
 echo "Eval:   job $EVAL_JID1 (n=3,4)  $EVAL_JID2 (n=5)  $EVAL_JID3 (n=6)"
 
 # 3. Plot — depends on ALL 3 eval array jobs completing successfully
+# Explicitly pass partition/account to override SBATCH_PARTITION/SBATCH_ACCOUNT env vars
+# (plot_results uses serial_requeue, not the GPU partition)
 PLOT_JID=$(sbatch --parsable \
+  --partition=serial_requeue --account=kdbrantley_lab \
   --dependency=afterok:${EVAL_JID1}:${EVAL_JID2}:${EVAL_JID3} \
   scripts/plot_results.sh)
 echo "Plot:   job $PLOT_JID"
