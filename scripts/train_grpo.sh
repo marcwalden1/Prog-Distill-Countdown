@@ -101,7 +101,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=64 \
-    actor_rollout_ref.ref.fsdp_config.param_offload=False \
+    actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \
     algorithm.norm_adv_by_std_in_grpo=False \
     trainer.val_before_train=True \
@@ -124,7 +124,7 @@ python3 -m verl.trainer.main_ppo \
     critic.strategy=fsdp2 \
     reward_model.strategy=fsdp2 \
     actor_rollout_ref.rollout.enforce_eager=False \
-    actor_rollout_ref.rollout.free_cache_engine=False
+    actor_rollout_ref.rollout.free_cache_engine=True
 TRAIN_EXIT_CODE=$?
 
 chmod -R 770 ${output_dir}/${exp_name}
