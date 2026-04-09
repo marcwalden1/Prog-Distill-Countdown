@@ -13,7 +13,8 @@ module load Miniforge3/26.1.0-fasrc01
 source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
 conda activate verl
 
-export WANDB_MODE="offline"
+export WANDB_MODE="online"
+export WANDB_ENTITY="marcwalden-harvard-university"
 export RAY_DISABLE_DASHBOARD=1
 export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 
