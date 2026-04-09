@@ -31,9 +31,10 @@ TRAIN_JID=$(sbatch --parsable $TRAIN_SBATCH_ARGS scripts/train_grpo.sh)
 echo "Train:  job $TRAIN_JID"
 
 # 2. Eval — 3 datasets in parallel, all depend on train finishing
-EVAL_JID1=$(EVAL_DATASET=balanced  sbatch --parsable --dependency=afterok:${TRAIN_JID} scripts/eval.sh)
-EVAL_JID2=$(EVAL_DATASET=balanced5 sbatch --parsable --dependency=afterok:${TRAIN_JID} scripts/eval.sh)
-EVAL_JID3=$(EVAL_DATASET=balanced6 sbatch --parsable --dependency=afterok:${TRAIN_JID} scripts/eval.sh)
+# Explicitly pass partition/account to override SBATCH_PARTITION env var
+EVAL_JID1=$(EVAL_DATASET=balanced  sbatch --parsable --partition=kempner_requeue --account=kempner_kdbrantley_lab --dependency=afterok:${TRAIN_JID} scripts/eval.sh)
+EVAL_JID2=$(EVAL_DATASET=balanced5 sbatch --parsable --partition=kempner_requeue --account=kempner_kdbrantley_lab --dependency=afterok:${TRAIN_JID} scripts/eval.sh)
+EVAL_JID3=$(EVAL_DATASET=balanced6 sbatch --parsable --partition=kempner_requeue --account=kempner_kdbrantley_lab --dependency=afterok:${TRAIN_JID} scripts/eval.sh)
 echo "Eval:   job $EVAL_JID1 (n=3,4)  $EVAL_JID2 (n=5)  $EVAL_JID3 (n=6)"
 
 # 3. Plot — depends on ALL 3 eval array jobs completing successfully
