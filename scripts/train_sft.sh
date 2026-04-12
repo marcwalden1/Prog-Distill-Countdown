@@ -66,7 +66,7 @@ echo "============================================================"
 
 cd ${project_dir}/verl
 
-torchrun \
+python3 -m torch.distributed.run \
     --nproc_per_node=${N_GPUS} \
     --master_addr=localhost \
     --master_port=${MASTER_PORT} \

@@ -29,6 +29,12 @@ figures_dir=${FIGURES_DIR:-${project_dir}/figures}
 
 model_name=${MODEL_NAME:-Qwen2.5-1.5B}
 exp_name=${EXP_NAME:-balanced-grpo-seed1}
+condition=${CONDITION:-}
+
+condition_arg=""
+if [ -n "$condition" ]; then
+    condition_arg="--condition ${condition}"
+fi
 
 python3 ${project_dir}/plot_results.py \
     --model_name     ${model_name} \
@@ -36,4 +42,5 @@ python3 ${project_dir}/plot_results.py \
     --result_dir     ${result_dir} \
     --log_dir        ${log_dir} \
     --figures_dir    ${figures_dir} \
-    --model_base_dir ${MODEL_DIR:-$_model_dir}
+    --model_base_dir ${MODEL_DIR:-$_model_dir} \
+    ${condition_arg}

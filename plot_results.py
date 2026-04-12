@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import re
@@ -24,6 +25,7 @@ import time
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import wandb
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gather_experiment import find_training_log, parse_step_metrics
@@ -55,6 +57,8 @@ def parse_args():
     parser.add_argument("--figures_dir",  default="figures")
     parser.add_argument("--model_base_dir",
                         default="/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models")
+    parser.add_argument("--condition", default=None,
+                        help="Condition tag for WandB (e.g. rl-only, distill, progdistill)")
     return parser.parse_args()
 
 
@@ -367,7 +371,86 @@ def main():
     }
     plot_response_length(lengths_by_dataset, figures_dir, title_prefix)
 
+    # --- WandB: log eval metrics and val reward curve ---
+    print("\n[wandb] Logging eval metrics...", flush=True)
+    log_to_wandb(
+        model_name=model_name,
+        exp_name=exp_name,
+        val_curve=val_curve,
+        metrics_by_dataset={
+            n_label: compute_mean_metrics(args.result_dir, model_name, exp_name, dataset)
+            for dataset, n_label, _ in dataset_configs
+        },
+        lengths_by_dataset=lengths_by_dataset,
+        condition=args.condition,
+    )
+
     print("\nDone.", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# WandB logging
+# ---------------------------------------------------------------------------
+
+def log_to_wandb(model_name, exp_name, val_curve, metrics_by_dataset, lengths_by_dataset,
+                 condition=None):
+    # Deterministic run ID so re-running plot_results resumes the same eval run
+    run_id = hashlib.md5(f"{model_name}-{exp_name}-eval".encode()).hexdigest()[:8]
+
+    # Infer condition from exp_name if not provided
+    if condition is None:
+        if "progdistill" in exp_name:
+            condition = "progdistill"
+        elif "distill" in exp_name:
+            condition = "distill"
+        else:
+            condition = "rl-only"
+
+    tags = ["eval", condition]
+
+    run = wandb.init(
+        project="prog_distill",
+        entity="progressive_distill",
+        name=f"{model_name}-{exp_name}-eval",
+        id=run_id,
+        resume="allow",
+        tags=tags,
+        config={"model_name": model_name, "exp_name": exp_name, "condition": condition},
+    )
+
+    # Build per-step dicts for val reward and eval metrics
+    val_dict = dict(val_curve) if val_curve else {}
+
+    # Collect all steps that appear in any dataset
+    all_steps = sorted(set(
+        [s for s, _ in val_curve]
+        + [s for metrics in metrics_by_dataset.values() for s, _, _ in metrics]
+    ))
+
+    eval_by_step = {}
+    for n_label, metrics in metrics_by_dataset.items():
+        key = n_label.replace("=", "").replace(",", "_").replace("/", "_")  # n3_4, n5, n6
+        for step, m1, m32 in metrics:
+            eval_by_step.setdefault(step, {})[f"eval/{key}/mean_at_1"]  = m1
+            eval_by_step.setdefault(step, {})[f"eval/{key}/mean_at_32"] = m32
+
+    length_by_step = {}
+    for n_label, lengths in lengths_by_dataset.items():
+        key = n_label.replace("=", "").replace(",", "_").replace("/", "_")
+        for step, mean_len in lengths:
+            length_by_step.setdefault(step, {})[f"response_length/{key}"] = mean_len
+
+    for step in all_steps:
+        log_dict = {}
+        if step in val_dict:
+            log_dict["val/reward_mean_at_4"] = val_dict[step]
+        log_dict.update(eval_by_step.get(step, {}))
+        log_dict.update(length_by_step.get(step, {}))
+        if log_dict:
+            wandb.log(log_dict, step=step)
+
+    wandb.finish()
+    print(f"  WandB run: {run.url}", flush=True)
 
 
 if __name__ == "__main__":
