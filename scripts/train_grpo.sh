@@ -68,6 +68,9 @@ echo "Project dir:      ${project_dir}"
 echo "============================================================"
 
 ulimit -n 65536
+ray stop 2>/dev/null || true
+rm -rf /tmp/ray/ 2>/dev/null || true
+export RAY_TMPDIR=/tmp/ray_${SLURM_JOB_ID}
 ray start --head --num-gpus=${N_GPUS} --temp-dir=/tmp/ray_${SLURM_JOB_ID}
 
 python3 -m verl.trainer.main_ppo \
