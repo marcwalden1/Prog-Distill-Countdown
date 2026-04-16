@@ -2,6 +2,7 @@ data/
 logs/
 verl/
 results/
+figures/
 __pycache__/
 *.pyc
 *.pyo
