@@ -68,9 +68,19 @@ PROGDISTILL_STEPS_PER_ROUND=${PROGDISTILL_STEPS_PER_ROUND:-160}
 if [ "$USER" = "mwalden" ]; then
     _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints
     _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models
+    _account=kempner_kdbrantley_lab
+    _partition=kempner_h100
+    _plot_extra=""
+    _plot_partition=serial_requeue
+    _plot_account=kdbrantley_lab
 elif [ "$USER" = "sdholakia" ]; then
-    _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/sdholakia/rl-checkpoints
-    _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/sdholakia/models
+    _checkpoint_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/rl-checkpoints
+    _model_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/models
+    _account=kempner_bingbin_lab
+    _partition=kempner_requeue
+    _plot_extra="--gres=gpu:nvidia_h100_80gb_hbm3:1"
+    _plot_partition=kempner_requeue
+    _plot_account=kempner_bingbin_lab
 else
     echo "ERROR: Unknown user $USER. Set CHECKPOINT_DIR and MODEL_DIR explicitly." >&2
     exit 1
@@ -91,7 +101,7 @@ submit_gendata() {
     TEACHER_STEP="${teacher_step}" \
     N_RESPONSES="${N_RESPONSES:-16}" \
     sbatch --parsable \
-        --partition=kempner_h100 --account=kempner_kdbrantley_lab \
+        --partition=$_partition --account=$_account \
         ${dep_arg} \
         ${SFT_SBATCH_ARGS} \
         scripts/generate_sft_data.sh
@@ -115,7 +125,7 @@ submit_sft() {
     SFT_LR="${SFT_LR:-1e-5}" \
     SFT_EXPERIMENT_LABEL="${sft_experiment_label}" \
     sbatch --parsable \
-        --partition=kempner_h100 --account=kempner_kdbrantley_lab \
+        --partition=$_partition --account=$_account \
         ${dep_arg} \
         ${SFT_SBATCH_ARGS} \
         scripts/train_sft.sh
@@ -125,7 +135,7 @@ submit_sft() {
 # Mode: plain RL (no distillation)
 # ---------------------------------------------------------------------------
 if [ -z "$DISTILL_MODE" ]; then
-    TRAIN_JID=$(sbatch --parsable $TRAIN_SBATCH_ARGS scripts/train_grpo.sh)
+    TRAIN_JID=$(sbatch --parsable --account=$_account --partition=$_partition $TRAIN_SBATCH_ARGS scripts/train_grpo.sh)
     echo "Train:  job $TRAIN_JID"
 
 # ---------------------------------------------------------------------------
@@ -154,6 +164,7 @@ elif [ "$DISTILL_MODE" = "distill" ]; then
     # 3. GRPO starting from SFT checkpoint
     MODEL_PATH="${sft_ckpt_dir}" \
     TRAIN_JID=$(sbatch --parsable \
+        --account=$_account --partition=$_partition \
         --dependency=afterok:${SFT_JID} \
         $TRAIN_SBATCH_ARGS \
         scripts/train_grpo.sh)
@@ -214,6 +225,7 @@ elif [ "$DISTILL_MODE" = "progdistill" ]; then
     # GRPO from final progressive SFT checkpoint
     MODEL_PATH="${final_sft_ckpt}" \
     TRAIN_JID=$(sbatch --parsable \
+        --account=$_account --partition=$_partition \
         --dependency=afterok:${prev_sft_jid} \
         $TRAIN_SBATCH_ARGS \
         scripts/train_grpo.sh)
@@ -228,15 +240,15 @@ fi
 # Eval — 3 datasets in parallel, all depend on GRPO train finishing
 # ---------------------------------------------------------------------------
 EVAL_JID1=$(EVAL_DATASET=balanced  sbatch --parsable \
-    --partition=kempner_requeue --account=kempner_kdbrantley_lab \
+    --partition=$_partition --account=$_account \
     --dependency=afterok:${TRAIN_JID} \
     scripts/eval.sh)
 EVAL_JID2=$(EVAL_DATASET=balanced5 sbatch --parsable \
-    --partition=kempner_requeue --account=kempner_kdbrantley_lab \
+    --partition=$_partition --account=$_account \
     --dependency=afterok:${TRAIN_JID} \
     scripts/eval.sh)
 EVAL_JID3=$(EVAL_DATASET=balanced6 sbatch --parsable \
-    --partition=kempner_requeue --account=kempner_kdbrantley_lab \
+    --partition=$_partition --account=$_account \
     --dependency=afterok:${TRAIN_JID} \
     scripts/eval.sh)
 echo "Eval:   job $EVAL_JID1 (n=3,4)  $EVAL_JID2 (n=5)  $EVAL_JID3 (n=6)"
@@ -245,7 +257,7 @@ echo "Eval:   job $EVAL_JID1 (n=3,4)  $EVAL_JID2 (n=5)  $EVAL_JID3 (n=6)"
 # Plot — depends on ALL 3 eval array jobs completing
 # ---------------------------------------------------------------------------
 PLOT_JID=$(sbatch --parsable \
-    --partition=serial_requeue --account=kdbrantley_lab \
+    --partition=$_plot_partition --account=$_plot_account $_plot_extra \
     --dependency=afterok:${EVAL_JID1}:${EVAL_JID2}:${EVAL_JID3} \
     scripts/plot_results.sh)
 echo "Plot:   job $PLOT_JID"
