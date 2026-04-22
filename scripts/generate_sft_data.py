@@ -1,9 +1,10 @@
 """
 Generate SFT training data from a teacher model checkpoint.
 
-Runs vLLM inference on the training set, filters to only correct solutions
-(score == 1.0), and saves a parquet with 'prompt' and 'response' columns
-compatible with verl's SFTDataset.
+Runs vLLM inference on the training set and saves a parquet with 'prompt' and
+'response' columns compatible with verl's SFTDataset. By default ALL teacher
+responses are saved (correct, partially correct with format-only, and empty);
+pass --filter_correct_only to keep only score==1.0 responses.
 
 Usage:
     python3 scripts/generate_sft_data.py \
@@ -11,7 +12,8 @@ Usage:
         --output_path /path/to/output.parquet \
         [--data_path data/balanced/train.parquet] \
         [--n_responses 16] \
-        [--max_length 1024]
+        [--max_length 1024] \
+        [--filter_correct_only]
 """
 
 import argparse
@@ -42,6 +44,8 @@ def parse_args():
     parser.add_argument("--max_prompts", type=int, default=10000,
                         help="Max number of prompts to run inference on (random sample). "
                              "Set to 0 to use all prompts (slow for large datasets).")
+    parser.add_argument("--filter_correct_only", action="store_true",
+                        help="Keep only responses with score==1.0. Default: keep all responses.")
     return parser.parse_args()
 
 
@@ -93,7 +97,7 @@ def main():
 
     sampling_params = SamplingParams(
         n=args.n_responses,
-        temperature=1.0,
+        temperature=0.6,
         max_tokens=args.max_length,
         stop=["</s>", tokenizer.eos_token] if tokenizer.eos_token else ["</s>"],
     )
@@ -101,11 +105,12 @@ def main():
     print("Generating responses...")
     outputs = llm.generate(formatted_prompts, sampling_params)
 
-    # Filter to correct solutions only
     sft_prompts = []
     sft_responses = []
+    n_correct = 0
+    n_partial = 0
+    n_empty = 0
     n_with_correct = 0
-    n_total_correct = 0
 
     for i, output in enumerate(outputs):
         ground_truth = ground_truths[i]
@@ -125,20 +130,36 @@ def main():
                 verbose=False,
             )
             if score == 1.0:
+                n_correct += 1
+                found_correct = True
+            elif score == 0.1:
+                n_partial += 1
+            else:
+                n_empty += 1
+
+            if args.filter_correct_only:
+                if score == 1.0:
+                    sft_prompts.append(prompt_str)
+                    sft_responses.append(full_response)
+            else:
                 sft_prompts.append(prompt_str)
                 sft_responses.append(full_response)
-                n_total_correct += 1
-                found_correct = True
 
         if found_correct:
             n_with_correct += 1
 
-    print(f"\nCoverage: {n_with_correct}/{len(df)} prompts have ≥1 correct solution "
+    n_total = n_correct + n_partial + n_empty
+    print(f"\nResponse breakdown: {n_correct} correct, {n_partial} format-only, "
+          f"{n_empty} no-answer-tag (total: {n_total})")
+    print(f"Prompts with >=1 correct: {n_with_correct}/{len(df)} "
           f"({100*n_with_correct/len(df):.1f}%)")
-    print(f"Total correct (prompt, response) pairs: {n_total_correct}")
+    if args.filter_correct_only:
+        print(f"Filter mode: CORRECT-ONLY — saving {len(sft_prompts)} rows")
+    else:
+        print(f"Filter mode: ALL responses — saving {len(sft_prompts)} rows")
 
-    if n_total_correct == 0:
-        print("WARNING: No correct solutions found — SFT data will be empty!")
+    if len(sft_prompts) == 0:
+        print("WARNING: No responses to save — SFT data will be empty!")
 
     out_df = pd.DataFrame({"prompt": sft_prompts, "response": sft_responses})
     os.makedirs(os.path.dirname(os.path.abspath(args.output_path)), exist_ok=True)

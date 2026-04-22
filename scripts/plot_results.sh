@@ -10,6 +10,8 @@ module load Miniforge3/26.1.0-fasrc01
 source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
 conda activate verl
 
+export WANDB_MODE="online"
+export WANDB_ENTITY="progressive_distill"
 export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 
 # User-specific default paths
@@ -35,6 +37,9 @@ condition_arg=""
 if [ -n "$condition" ]; then
     condition_arg="--condition ${condition}"
 fi
+
+echo "W&B mode:   ${WANDB_MODE}"
+echo "W&B entity: ${WANDB_ENTITY}"
 
 python3 ${project_dir}/plot_results.py \
     --model_name     ${model_name} \

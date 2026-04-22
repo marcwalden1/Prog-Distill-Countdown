@@ -104,14 +104,15 @@ class TestPromptExtraction(unittest.TestCase):
 
 
 class TestFiltering(unittest.TestCase):
-    """Only score==1.0 responses should be kept in the SFT parquet."""
+    """Default: all responses kept. With --filter_correct_only: only score==1.0."""
 
-    def _run_main(self, tmp_dir, rows, llm_response_texts):
+    def _run_main(self, tmp_dir, rows, llm_response_texts, filter_correct_only=False):
         """
         Run generate_sft_data.main() with mocked vLLM and return the output DataFrame.
 
         llm_response_texts: list of lists, one per row, each sub-list contains
                             the raw generation texts for that prompt.
+        filter_correct_only: pass --filter_correct_only to the script under test.
         """
         data_path = os.path.join(tmp_dir, "train.parquet")
         output_path = os.path.join(tmp_dir, "sft_out.parquet")
@@ -126,7 +127,7 @@ class TestFiltering(unittest.TestCase):
              patch("generate_sft_data.SamplingParams", return_value=MagicMock()), \
              patch("generate_sft_data.AutoTokenizer") as mock_tok_cls:
             mock_tok_cls.from_pretrained.return_value = fake_tok
-            sys.argv = [
+            argv = [
                 "generate_sft_data.py",
                 "--teacher_checkpoint_path", "/fake/ckpt",
                 "--output_path", output_path,
@@ -134,52 +135,75 @@ class TestFiltering(unittest.TestCase):
                 "--n_responses", "4",
                 "--max_length", "512",
             ]
+            if filter_correct_only:
+                argv.append("--filter_correct_only")
+            sys.argv = argv
             generate_sft_data.main()
 
         return pd.read_parquet(output_path)
 
-    def test_correct_solutions_only_kept(self):
-        """
-        Prompt: target=12, numbers=[3,4,5].
-        Give one correct response (3+4+5=12 inside <answer> tags) and one wrong one.
-        Only the correct one should appear in the output.
-        """
+    # -- Default behaviour: keep all responses -------------------------------
+
+    def test_default_keeps_all_responses(self):
+        """Default: correct + format-only-wrong + no-answer all kept."""
         with tempfile.TemporaryDirectory() as d:
-            # The full model output is "Let me solve...<think>" prefix + completion text
-            # generate_sft_data.py prepends "Let me solve this step by step.\n<think>"
-            # then scores the full concatenation. We need valid <answer> tags.
             correct_text = "3+4+5 = 12</think>\n<answer> 3+4+5 </answer>"
             wrong_text   = "3+4+5 = 100</think>\n<answer> 3+4+100 </answer>"
+            no_ans_text  = "no idea</think>"
 
             rows = [("prompt1", 12, [3, 4, 5])]
-            # Two completions for the one prompt
-            llm_texts = [[correct_text, wrong_text]]
+            llm_texts = [[correct_text, wrong_text, no_ans_text]]
 
             out_df = self._run_main(d, rows, llm_texts)
+            self.assertEqual(len(out_df), 3, "Expected all 3 responses kept by default")
 
-            self.assertEqual(len(out_df), 1, "Expected exactly 1 correct response")
-            self.assertIn("prompt", out_df.columns)
-            self.assertIn("response", out_df.columns)
-            # Response must be the full generation including the prefix
-            self.assertIn("<answer> 3+4+5 </answer>", out_df["response"].iloc[0])
-
-    def test_no_correct_solutions_gives_empty_df(self):
-        """If no response is correct the output parquet should have 0 rows."""
+    def test_default_all_wrong_still_kept(self):
+        """With no correct responses, default still keeps all wrong ones."""
         with tempfile.TemporaryDirectory() as d:
             wrong_text = "I give up</think>\n<answer> 99 </answer>"
             rows = [("prompt1", 12, [3, 4, 5])]
             llm_texts = [[wrong_text, wrong_text]]
             out_df = self._run_main(d, rows, llm_texts)
+            self.assertEqual(len(out_df), 2)
+
+    # -- --filter_correct_only behaviour -------------------------------------
+
+    def test_filter_correct_solutions_only_kept(self):
+        """With --filter_correct_only: only score==1.0 responses kept."""
+        with tempfile.TemporaryDirectory() as d:
+            correct_text = "3+4+5 = 12</think>\n<answer> 3+4+5 </answer>"
+            wrong_text   = "3+4+5 = 100</think>\n<answer> 3+4+100 </answer>"
+
+            rows = [("prompt1", 12, [3, 4, 5])]
+            llm_texts = [[correct_text, wrong_text]]
+
+            out_df = self._run_main(d, rows, llm_texts, filter_correct_only=True)
+
+            self.assertEqual(len(out_df), 1, "Expected exactly 1 correct response")
+            self.assertIn("prompt", out_df.columns)
+            self.assertIn("response", out_df.columns)
+            self.assertIn("<answer> 3+4+5 </answer>", out_df["response"].iloc[0])
+
+    def test_filter_no_correct_solutions_gives_empty_df(self):
+        """--filter_correct_only with no correct responses → empty parquet."""
+        with tempfile.TemporaryDirectory() as d:
+            wrong_text = "I give up</think>\n<answer> 99 </answer>"
+            rows = [("prompt1", 12, [3, 4, 5])]
+            llm_texts = [[wrong_text, wrong_text]]
+            out_df = self._run_main(d, rows, llm_texts, filter_correct_only=True)
             self.assertEqual(len(out_df), 0)
 
+    # -- Behaviour shared across both modes ----------------------------------
+
     def test_multiple_correct_responses_all_kept(self):
-        """Both correct responses from the same prompt should appear as separate rows."""
+        """Both correct responses from the same prompt appear as separate rows."""
         with tempfile.TemporaryDirectory() as d:
             c1 = "3+4+5=12</think>\n<answer> 3+4+5 </answer>"
             c2 = "3+(4+5)=12</think>\n<answer> 3+(4+5) </answer>"
             rows = [("prompt1", 12, [3, 4, 5])]
             llm_texts = [[c1, c2]]
-            out_df = self._run_main(d, rows, llm_texts)
+            # Use filter_correct_only to isolate the "multiple correct" behaviour
+            out_df = self._run_main(d, rows, llm_texts, filter_correct_only=True)
             self.assertEqual(len(out_df), 2)
             self.assertEqual(out_df["prompt"].iloc[0], out_df["prompt"].iloc[1],
                              "Both rows should have the same prompt")
@@ -195,11 +219,8 @@ class TestFiltering(unittest.TestCase):
             self.assertTrue(all(isinstance(v, str) for v in out_df["prompt"]))
             self.assertTrue(all(isinstance(v, str) for v in out_df["response"]))
 
-    def test_multi_prompt_coverage(self):
-        """
-        3 prompts, only 2 have correct solutions.
-        Coverage should be 2/3 correct prompts.
-        """
+    def test_filter_multi_prompt_coverage(self):
+        """3 prompts × 1 response each, 2 correct: with --filter_correct_only → 2 rows."""
         with tempfile.TemporaryDirectory() as d:
             c = "3+4+5=12</think>\n<answer> 3+4+5 </answer>"
             w = "nope</think>\n<answer> 99 </answer>"
@@ -208,10 +229,23 @@ class TestFiltering(unittest.TestCase):
                 ("p2", 12, [3, 4, 5]),
                 ("p3", 12, [3, 4, 5]),
             ]
-            # prompt 1: 1 correct, prompt 2: 0 correct, prompt 3: 1 correct
+            llm_texts = [[c], [w], [c]]
+            out_df = self._run_main(d, rows, llm_texts, filter_correct_only=True)
+            self.assertEqual(len(out_df), 2)
+
+    def test_default_multi_prompt_keeps_all(self):
+        """Same 3×1 setup, default mode keeps all 3 responses regardless of score."""
+        with tempfile.TemporaryDirectory() as d:
+            c = "3+4+5=12</think>\n<answer> 3+4+5 </answer>"
+            w = "nope</think>\n<answer> 99 </answer>"
+            rows = [
+                ("p1", 12, [3, 4, 5]),
+                ("p2", 12, [3, 4, 5]),
+                ("p3", 12, [3, 4, 5]),
+            ]
             llm_texts = [[c], [w], [c]]
             out_df = self._run_main(d, rows, llm_texts)
-            self.assertEqual(len(out_df), 2)
+            self.assertEqual(len(out_df), 3)
 
 
 class TestGraderUtilsIntegration(unittest.TestCase):

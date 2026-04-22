@@ -30,15 +30,17 @@ checkpoint_dir=${CHECKPOINT_DIR:-$_checkpoint_dir}
 model_name=${MODEL_NAME:-Qwen2.5-1.5B}
 exp_name=${EXP_NAME:-balanced-distill-grpo-seed1}
 teacher_exp_name=${TEACHER_EXP_NAME:?TEACHER_EXP_NAME must be set}
+teacher_model_name=${TEACHER_MODEL_NAME:-${model_name}}
 teacher_step=${TEACHER_STEP:-final}
 data_source=${DATA_SOURCE:-balanced}
 n_responses=${N_RESPONSES:-16}
 max_length=${MAX_LENGTH:-1024}
+filter_correct_only=${FILTER_CORRECT_ONLY:-false}
 
 # Resolve teacher checkpoint path
 if [ "$teacher_step" = "final" ]; then
     # Find the highest global_step directory
-    teacher_base=${checkpoint_dir}/checkpoints/${model_name}/${teacher_exp_name}
+    teacher_base=${checkpoint_dir}/checkpoints/${teacher_model_name}/${teacher_exp_name}
     teacher_step_num=$(ls -d ${teacher_base}/global_step_* 2>/dev/null | \
         sed 's/.*global_step_//' | sort -n | tail -1)
     if [ -z "$teacher_step_num" ]; then
@@ -47,7 +49,12 @@ if [ "$teacher_step" = "final" ]; then
     fi
     teacher_ckpt_path=${teacher_base}/global_step_${teacher_step_num}
 else
-    teacher_ckpt_path=${checkpoint_dir}/checkpoints/${model_name}/${teacher_exp_name}/global_step_${teacher_step}
+    teacher_ckpt_path=${checkpoint_dir}/checkpoints/${teacher_model_name}/${teacher_exp_name}/global_step_${teacher_step}
+fi
+
+filter_args=""
+if [ "${filter_correct_only}" = "true" ] || [ "${filter_correct_only}" = "1" ]; then
+    filter_args="--filter_correct_only"
 fi
 
 output_path=${checkpoint_dir}/sft-data/${model_name}/${exp_name}/step_${teacher_step}.parquet
@@ -58,14 +65,16 @@ echo "GENERATE SFT DATA"
 echo "Date:              $(date)"
 echo "SLURM Job ID:      ${SLURM_JOB_ID}"
 echo "Node:              $(hostname)"
-echo "Model:             ${model_name}"
+echo "Student model:     ${model_name}"
 echo "Exp name:          ${exp_name}"
+echo "Teacher model:     ${teacher_model_name}"
 echo "Teacher exp:       ${teacher_exp_name}"
 echo "Teacher step:      ${teacher_step}"
 echo "Teacher ckpt:      ${teacher_ckpt_path}"
 echo "Data source:       ${data_source}"
 echo "N responses:       ${n_responses}"
 echo "Max length:        ${max_length}"
+echo "Filter correct:    ${filter_correct_only}"
 echo "Output path:       ${output_path}"
 echo "============================================================"
 
@@ -90,6 +99,7 @@ python3 ${project_dir}/scripts/generate_sft_data.py \
     --output_path ${output_path} \
     --data_path ${data_path} \
     --n_responses ${n_responses} \
-    --max_length ${max_length}
+    --max_length ${max_length} \
+    ${filter_args}
 
 chmod -R 770 ${checkpoint_dir}/sft-data/${model_name}/${exp_name}

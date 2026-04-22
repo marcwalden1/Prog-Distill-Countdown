@@ -6,13 +6,25 @@
 #   MODEL_NAME=Qwen2.5-1.5B EXP_NAME=my-exp bash scripts/run_pipeline.sh
 #   MODEL_NAME=Qwen2.5-0.5B EXP_NAME=my-exp KL_COEF=0.0001 bash scripts/run_pipeline.sh
 #
-# Distillation (SFT on teacher's final checkpoint → GRPO):
+# Distillation only — SFT the student on the teacher's responses, no GRPO:
 #   MODEL_NAME=Qwen2.5-0.5B EXP_NAME=balanced-distill-seed1 \
 #     bash scripts/run_pipeline.sh --distill balanced-grpo-kl1e-3-lr1e-6-seed1
 #
-# Progressive distillation ((N,T) curriculum per arxiv:2410.05464 → GRPO):
+# Distillation + GRPO (SFT then continue with GRPO, eval, plot):
+#   MODEL_NAME=Qwen2.5-0.5B EXP_NAME=balanced-distill-grpo-seed1 \
+#     bash scripts/run_pipeline.sh --distill balanced-grpo-kl1e-3-lr1e-6-seed1 --GRPO
+#
+# Cross-size distillation (1.5B teacher → 0.5B student, SFT only):
+#   MODEL_NAME=Qwen2.5-0.5B EXP_NAME=balanced-distill-cross-seed1 \
+#     TEACHER_MODEL_NAME=Qwen2.5-1.5B \
+#     bash scripts/run_pipeline.sh --distill balanced-grpo-kl3e-3-lr3e-6-seed1
+#
+# Progressive distillation ((N,T) curriculum per arxiv:2410.05464, SFT only):
 #   MODEL_NAME=Qwen2.5-0.5B EXP_NAME=balanced-progdistill-seed1 \
 #     bash scripts/run_pipeline.sh --progdistill balanced-grpo-kl1e-3-lr1e-6-seed1
+#
+# --GRPO can be combined with either --distill or --progdistill to run RL
+# after distillation. Without --GRPO those modes stop at SFT.
 #
 # For 7B (needs 8 GPUs):
 #   MODEL_NAME=Qwen2.5-7B EXP_NAME=my-exp \
@@ -29,6 +41,8 @@
 #   SFT_TRAIN_STEPS            — total SFT steps for --distill mode (default: 1600, matches progdistill budget)
 #   SFT_LR                     — SFT learning rate (default: 1e-5)
 #   N_RESPONSES                — teacher responses per prompt for data gen (default: 16)
+#   TEACHER_MODEL_NAME         — teacher arch/size for cross-size distill (default: MODEL_NAME = student)
+#   FILTER_CORRECT_ONLY        — keep only score==1.0 teacher responses (default: false; keeps all)
 
 set -euo pipefail
 
@@ -37,6 +51,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 DISTILL_MODE=""
 TEACHER_EXP_NAME=""
+RUN_GRPO=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --distill)
@@ -49,12 +64,21 @@ while [[ $# -gt 0 ]]; do
             TEACHER_EXP_NAME="${2:?--progdistill requires a teacher EXP_NAME}"
             shift 2
             ;;
+        --GRPO|--grpo)
+            RUN_GRPO=1
+            shift
+            ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 1
             ;;
     esac
 done
+
+# Plain RL mode always runs GRPO; distill/progdistill need --GRPO to enable it.
+if [ -z "$DISTILL_MODE" ]; then
+    RUN_GRPO=1
+fi
 
 export MODEL_NAME=${MODEL_NAME:-Qwen2.5-1.5B}
 export EXP_NAME=${EXP_NAME:-balanced-grpo-seed1}
@@ -88,7 +112,11 @@ fi
 checkpoint_dir=${CHECKPOINT_DIR:-$_checkpoint_dir}
 model_dir=${MODEL_DIR:-$_model_dir}
 
-echo "===== Pipeline: $MODEL_NAME / $EXP_NAME  [mode: ${DISTILL_MODE:-rl}] ====="
+mode_label="${DISTILL_MODE:-rl}"
+if [ -n "$DISTILL_MODE" ] && [ -n "$RUN_GRPO" ]; then
+    mode_label="${DISTILL_MODE}+grpo"
+fi
+echo "===== Pipeline: $MODEL_NAME / $EXP_NAME  [mode: ${mode_label}] ====="
 
 # ---------------------------------------------------------------------------
 # Helper: submit generate_sft_data.sh for a given teacher step
@@ -98,8 +126,10 @@ submit_gendata() {
     local teacher_step="$1"
     local dep_arg="${2:-}"  # e.g. "--dependency=afterok:12345" or ""
     TEACHER_EXP_NAME="${TEACHER_EXP_NAME}" \
+    TEACHER_MODEL_NAME="${TEACHER_MODEL_NAME:-}" \
     TEACHER_STEP="${teacher_step}" \
     N_RESPONSES="${N_RESPONSES:-16}" \
+    FILTER_CORRECT_ONLY="${FILTER_CORRECT_ONLY:-false}" \
     sbatch --parsable \
         --partition=$_partition --account=$_account \
         ${dep_arg} \
@@ -161,14 +191,17 @@ elif [ "$DISTILL_MODE" = "distill" ]; then
         "--dependency=afterok:${GENDATA_JID}")
     echo "SFT:    job $SFT_JID (${sft_steps} steps)"
 
-    # 3. GRPO starting from SFT checkpoint
-    MODEL_PATH="${sft_ckpt_dir}" \
-    TRAIN_JID=$(sbatch --parsable \
-        --account=$_account --partition=$_partition \
-        --dependency=afterok:${SFT_JID} \
-        $TRAIN_SBATCH_ARGS \
-        scripts/train_grpo.sh)
-    echo "Train:  job $TRAIN_JID (GRPO from SFT checkpoint)"
+    # 3. GRPO starting from SFT checkpoint (only if --GRPO specified)
+    TRAIN_JID=""
+    if [ -n "$RUN_GRPO" ]; then
+        MODEL_PATH="${sft_ckpt_dir}" \
+        TRAIN_JID=$(sbatch --parsable \
+            --account=$_account --partition=$_partition \
+            --dependency=afterok:${SFT_JID} \
+            $TRAIN_SBATCH_ARGS \
+            scripts/train_grpo.sh)
+        echo "Train:  job $TRAIN_JID (GRPO from SFT checkpoint)"
+    fi
 
 # ---------------------------------------------------------------------------
 # Mode: progdistill — (N=32, T=PROGDISTILL_STEPS_PER_ROUND) progressive
@@ -222,14 +255,17 @@ elif [ "$DISTILL_MODE" = "progdistill" ]; then
 
     final_sft_ckpt="${sft_ckpt_base}/round_1600"
 
-    # GRPO from final progressive SFT checkpoint
-    MODEL_PATH="${final_sft_ckpt}" \
-    TRAIN_JID=$(sbatch --parsable \
-        --account=$_account --partition=$_partition \
-        --dependency=afterok:${prev_sft_jid} \
-        $TRAIN_SBATCH_ARGS \
-        scripts/train_grpo.sh)
-    echo "Train:  job $TRAIN_JID (GRPO from progdistill round_1600 checkpoint)"
+    # GRPO from final progressive SFT checkpoint (only if --GRPO specified)
+    TRAIN_JID=""
+    if [ -n "$RUN_GRPO" ]; then
+        MODEL_PATH="${final_sft_ckpt}" \
+        TRAIN_JID=$(sbatch --parsable \
+            --account=$_account --partition=$_partition \
+            --dependency=afterok:${prev_sft_jid} \
+            $TRAIN_SBATCH_ARGS \
+            scripts/train_grpo.sh)
+        echo "Train:  job $TRAIN_JID (GRPO from progdistill round_1600 checkpoint)"
+    fi
 
 else
     echo "ERROR: Unknown DISTILL_MODE=${DISTILL_MODE}" >&2
@@ -237,30 +273,34 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Eval — 3 datasets in parallel, all depend on GRPO train finishing
+# Eval + plot — only submitted when a GRPO training job exists.
+# Without --GRPO, distill/progdistill runs stop at SFT.
 # ---------------------------------------------------------------------------
-EVAL_JID1=$(EVAL_DATASET=balanced  sbatch --parsable \
-    --partition=$_partition --account=$_account \
-    --dependency=afterok:${TRAIN_JID} \
-    scripts/eval.sh)
-EVAL_JID2=$(EVAL_DATASET=balanced5 sbatch --parsable \
-    --partition=$_partition --account=$_account \
-    --dependency=afterok:${TRAIN_JID} \
-    scripts/eval.sh)
-EVAL_JID3=$(EVAL_DATASET=balanced6 sbatch --parsable \
-    --partition=$_partition --account=$_account \
-    --dependency=afterok:${TRAIN_JID} \
-    scripts/eval.sh)
-echo "Eval:   job $EVAL_JID1 (n=3,4)  $EVAL_JID2 (n=5)  $EVAL_JID3 (n=6)"
+if [ -n "${TRAIN_JID:-}" ]; then
+    EVAL_JID1=$(EVAL_DATASET=balanced  sbatch --parsable \
+        --partition=$_partition --account=$_account \
+        --dependency=afterok:${TRAIN_JID} \
+        scripts/eval.sh)
+    EVAL_JID2=$(EVAL_DATASET=balanced5 sbatch --parsable \
+        --partition=$_partition --account=$_account \
+        --dependency=afterok:${TRAIN_JID} \
+        scripts/eval.sh)
+    EVAL_JID3=$(EVAL_DATASET=balanced6 sbatch --parsable \
+        --partition=$_partition --account=$_account \
+        --dependency=afterok:${TRAIN_JID} \
+        scripts/eval.sh)
+    echo "Eval:   job $EVAL_JID1 (n=3,4)  $EVAL_JID2 (n=5)  $EVAL_JID3 (n=6)"
 
-# ---------------------------------------------------------------------------
-# Plot — depends on ALL 3 eval array jobs completing
-# ---------------------------------------------------------------------------
-PLOT_JID=$(sbatch --parsable \
-    --partition=$_plot_partition --account=$_plot_account $_plot_extra \
-    --dependency=afterok:${EVAL_JID1}:${EVAL_JID2}:${EVAL_JID3} \
-    scripts/plot_results.sh)
-echo "Plot:   job $PLOT_JID"
+    PLOT_JID=$(sbatch --parsable \
+        --partition=$_plot_partition --account=$_plot_account $_plot_extra \
+        --dependency=afterok:${EVAL_JID1}:${EVAL_JID2}:${EVAL_JID3} \
+        scripts/plot_results.sh)
+    echo "Plot:   job $PLOT_JID"
+else
+    echo ""
+    echo "SFT-only run — no GRPO, eval, or plot submitted."
+    echo "Re-run with --GRPO to continue into RL, eval, and plotting."
+fi
 
 echo ""
 echo "Pipeline submitted. Monitor with: squeue -u $USER"
