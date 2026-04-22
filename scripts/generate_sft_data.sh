@@ -36,6 +36,7 @@ data_source=${DATA_SOURCE:-balanced}
 n_responses=${N_RESPONSES:-16}
 max_length=${MAX_LENGTH:-1024}
 filter_correct_only=${FILTER_CORRECT_ONLY:-false}
+truncate=${TRUNCATE:-false}
 
 # Resolve teacher checkpoint path
 if [ "$teacher_step" = "final" ]; then
@@ -52,9 +53,12 @@ else
     teacher_ckpt_path=${checkpoint_dir}/checkpoints/${teacher_model_name}/${teacher_exp_name}/global_step_${teacher_step}
 fi
 
-filter_args=""
+extra_args=""
 if [ "${filter_correct_only}" = "true" ] || [ "${filter_correct_only}" = "1" ]; then
-    filter_args="--filter_correct_only"
+    extra_args="${extra_args} --filter_correct_only"
+fi
+if [ "${truncate}" = "true" ] || [ "${truncate}" = "1" ]; then
+    extra_args="${extra_args} --truncate"
 fi
 
 output_path=${checkpoint_dir}/sft-data/${model_name}/${exp_name}/step_${teacher_step}.parquet
@@ -75,6 +79,7 @@ echo "Data source:       ${data_source}"
 echo "N responses:       ${n_responses}"
 echo "Max length:        ${max_length}"
 echo "Filter correct:    ${filter_correct_only}"
+echo "Truncate:          ${truncate}"
 echo "Output path:       ${output_path}"
 echo "============================================================"
 
@@ -100,6 +105,6 @@ python3 ${project_dir}/scripts/generate_sft_data.py \
     --data_path ${data_path} \
     --n_responses ${n_responses} \
     --max_length ${max_length} \
-    ${filter_args}
+    ${extra_args}
 
 chmod -R 770 ${checkpoint_dir}/sft-data/${model_name}/${exp_name}

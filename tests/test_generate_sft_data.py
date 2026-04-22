@@ -248,6 +248,105 @@ class TestFiltering(unittest.TestCase):
             self.assertEqual(len(out_df), 3)
 
 
+class TestTruncation(unittest.TestCase):
+    """
+    truncate_to_final_attempt keeps text from just after the second-to-last
+    `</answer>` through the end of the response.
+    """
+
+    def test_three_answers_keeps_after_penultimate(self):
+        r = "<think>r</think>A<answer>1</answer>B<answer>2</answer>C<answer>3</answer>"
+        self.assertEqual(
+            generate_sft_data.truncate_to_final_attempt(r),
+            "C<answer>3</answer>",
+        )
+
+    def test_two_answers_keeps_after_first(self):
+        r = "X<answer>a</answer>Y<answer>b</answer>"
+        self.assertEqual(
+            generate_sft_data.truncate_to_final_attempt(r),
+            "Y<answer>b</answer>",
+        )
+
+    def test_single_answer_unchanged(self):
+        r = "only <answer>once</answer>"
+        self.assertEqual(generate_sft_data.truncate_to_final_attempt(r), r)
+
+    def test_no_answers_unchanged(self):
+        r = "no answer tags here"
+        self.assertEqual(generate_sft_data.truncate_to_final_attempt(r), r)
+
+    def test_trailing_text_after_final_answer_preserved(self):
+        r = "<answer>1</answer><answer>2</answer>trailing"
+        self.assertEqual(
+            generate_sft_data.truncate_to_final_attempt(r),
+            "<answer>2</answer>trailing",
+        )
+
+    def test_empty_answer_tags_handled(self):
+        r = "<answer></answer><answer></answer>"
+        self.assertEqual(
+            generate_sft_data.truncate_to_final_attempt(r),
+            "<answer></answer>",
+        )
+
+
+class TestTruncateFlagIntegration(unittest.TestCase):
+    """
+    End-to-end: with --truncate on the CLI, the saved parquet's response column
+    contains only the final-attempt substring, not the full teacher output.
+    """
+
+    def test_truncate_flag_truncates_saved_response(self):
+        with tempfile.TemporaryDirectory() as d:
+            data_path = os.path.join(d, "train.parquet")
+            output_path = os.path.join(d, "sft_out.parquet")
+            make_sample_parquet(data_path, [("prompt1", 12, [3, 4, 5])])
+
+            full = (
+                "<think>let me think</think>\n"
+                "<answer> 3+4+6 </answer> no, 3+4+6=13\n"
+                "<answer> 3+5+5 </answer> no, 3+5+5=13\n"
+                "<answer> 3+4+5 </answer>"
+            )
+            expected_truncated = full[full.rindex("</answer>", 0, full.rindex("</answer>")) + len("</answer>"):]
+            # Sanity: truncation drops the FIRST attempt (3+4+6) entirely.
+            # It preserves the trailing verification of the 2nd-to-last attempt
+            # ("no, 3+5+5=13") because that's the reasoning leading into the final answer.
+            self.assertNotIn("3+4+6", expected_truncated)
+            self.assertIn("<answer> 3+4+5 </answer>", expected_truncated)
+
+            fake_tok = _fake_tokenizer()
+            fake_outputs = _fake_llm_output([[full]])
+            fake_llm_instance = MagicMock()
+            fake_llm_instance.generate.return_value = fake_outputs
+
+            with patch("generate_sft_data.LLM", return_value=fake_llm_instance), \
+                 patch("generate_sft_data.SamplingParams", return_value=MagicMock()), \
+                 patch("generate_sft_data.AutoTokenizer") as mock_tok_cls:
+                mock_tok_cls.from_pretrained.return_value = fake_tok
+                sys.argv = [
+                    "generate_sft_data.py",
+                    "--teacher_checkpoint_path", "/fake/ckpt",
+                    "--output_path", output_path,
+                    "--data_path", data_path,
+                    "--n_responses", "1",
+                    "--max_length", "512",
+                    "--truncate",
+                ]
+                generate_sft_data.main()
+
+            out_df = pd.read_parquet(output_path)
+            self.assertEqual(len(out_df), 1)
+            saved = out_df["response"].iloc[0]
+            # Saved response should end with the final answer block and NOT
+            # contain the FIRST (earliest) wrong attempt — that's dropped.
+            self.assertNotIn("3+4+6", saved)
+            self.assertIn("<answer> 3+4+5 </answer>", saved)
+            # The saved response equals the truncation of the full response
+            self.assertEqual(saved, expected_truncated)
+
+
 class TestGraderUtilsIntegration(unittest.TestCase):
     """
     Verify that grader_utils.compute_score behaves correctly for the cases

@@ -13,11 +13,13 @@ Usage:
         [--data_path data/balanced/train.parquet] \
         [--n_responses 16] \
         [--max_length 1024] \
-        [--filter_correct_only]
+        [--filter_correct_only] \
+        [--truncate]
 """
 
 import argparse
 import os
+import re
 import sys
 
 import pandas as pd
@@ -27,6 +29,23 @@ from vllm import LLM, SamplingParams
 # grader_utils.py is in the repo root; add it to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from grader_utils import compute_score
+
+
+def truncate_to_final_attempt(response: str) -> str:
+    """
+    Keep only the substring from just after the second-to-last `</answer>` tag
+    through the end of the response (which includes the final `</answer>` and
+    any trailing text). If the response has <=1 `</answer>` tags, return it
+    unchanged (nothing to truncate).
+
+    Rationale: teacher outputs a chain of `<answer>X</answer> = verification`
+    blocks. The grader scores only the LAST `<answer>`, so the reasoning
+    leading up to that final answer is the reasoning "for" the final answer.
+    """
+    positions = [m.end() for m in re.finditer(r"</answer>", response)]
+    if len(positions) <= 1:
+        return response
+    return response[positions[-2]:]
 
 
 def parse_args():
@@ -46,6 +65,10 @@ def parse_args():
                              "Set to 0 to use all prompts (slow for large datasets).")
     parser.add_argument("--filter_correct_only", action="store_true",
                         help="Keep only responses with score==1.0. Default: keep all responses.")
+    parser.add_argument("--truncate", action="store_true",
+                        help="Truncate each response to text from just after the "
+                             "second-to-last </answer> through the end (keeps only "
+                             "the final answer + its immediately preceding reasoning).")
     return parser.parse_args()
 
 
@@ -137,13 +160,18 @@ def main():
             else:
                 n_empty += 1
 
+            stored_response = (
+                truncate_to_final_attempt(full_response)
+                if args.truncate else full_response
+            )
+
             if args.filter_correct_only:
                 if score == 1.0:
                     sft_prompts.append(prompt_str)
-                    sft_responses.append(full_response)
+                    sft_responses.append(stored_response)
             else:
                 sft_prompts.append(prompt_str)
-                sft_responses.append(full_response)
+                sft_responses.append(stored_response)
 
         if found_correct:
             n_with_correct += 1
@@ -157,6 +185,8 @@ def main():
         print(f"Filter mode: CORRECT-ONLY — saving {len(sft_prompts)} rows")
     else:
         print(f"Filter mode: ALL responses — saving {len(sft_prompts)} rows")
+    if args.truncate:
+        print("Truncation: ON (final-attempt only)")
 
     if len(sft_prompts) == 0:
         print("WARNING: No responses to save — SFT data will be empty!")
