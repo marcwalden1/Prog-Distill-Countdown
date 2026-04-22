@@ -18,7 +18,7 @@ export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 if [ "$USER" = "mwalden" ]; then
     _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models
 elif [ "$USER" = "sdholakia" ]; then
-    _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/sdholakia/models
+    _model_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/models
 else
     echo "ERROR: Unknown user $USER. Set MODEL_DIR explicitly." >&2
     exit 1

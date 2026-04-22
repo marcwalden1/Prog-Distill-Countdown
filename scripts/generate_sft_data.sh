@@ -18,7 +18,7 @@ export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 if [ "$USER" = "mwalden" ]; then
     _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints
 elif [ "$USER" = "sdholakia" ]; then
-    _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/sdholakia/rl-checkpoints
+    _checkpoint_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/rl-checkpoints
 else
     echo "ERROR: Unknown user $USER. Set CHECKPOINT_DIR explicitly." >&2
     exit 1

@@ -23,8 +23,8 @@ if [ "$USER" = "mwalden" ]; then
     _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models
     _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints
 elif [ "$USER" = "sdholakia" ]; then
-    _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/sdholakia/models
-    _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/sdholakia/rl-checkpoints
+    _model_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/models
+    _checkpoint_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/rl-checkpoints
 else
     echo "ERROR: Unknown user $USER. Set MODEL_DIR and CHECKPOINT_DIR explicitly." >&2
     exit 1
