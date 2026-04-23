@@ -34,8 +34,14 @@ exp_name=${EXP_NAME:-balanced-grpo-seed1}
 eval_dataset=${EVAL_DATASET:-balanced}
 extra_args=${EXTRA_ARGS:-""}
 
-checkpoint_path=${checkpoint_dir}/checkpoints/${model_name}/${exp_name}/global_step_$((50 * SLURM_ARRAY_TASK_ID))
-result_path=${result_dir}/results/${model_name}/${exp_name}/global_step_$((50 * SLURM_ARRAY_TASK_ID))
+if [ -n "${EVAL_CHECKPOINT_PATH:-}" ]; then
+    # SFT-only mode: eval a specific checkpoint (no array-index derivation).
+    checkpoint_path=${EVAL_CHECKPOINT_PATH}
+    result_path=${EVAL_RESULT_PATH:?EVAL_RESULT_PATH must be set when EVAL_CHECKPOINT_PATH is set}
+else
+    checkpoint_path=${checkpoint_dir}/checkpoints/${model_name}/${exp_name}/global_step_$((50 * SLURM_ARRAY_TASK_ID))
+    result_path=${result_dir}/results/${model_name}/${exp_name}/global_step_$((50 * SLURM_ARRAY_TASK_ID))
+fi
 
 if [ -f "${checkpoint_path}/model.safetensors" ]; then
     echo "Merged checkpoint already present at ${checkpoint_path}"

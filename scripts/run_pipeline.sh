@@ -167,6 +167,9 @@ submit_sft() {
 if [ -z "$DISTILL_MODE" ]; then
     TRAIN_JID=$(sbatch --parsable --account=$_account --partition=$_partition $TRAIN_SBATCH_ARGS scripts/train_grpo.sh)
     echo "Train:  job $TRAIN_JID"
+    FINAL_JID="${TRAIN_JID}"
+    FINAL_EVAL_CKPT=""
+    FINAL_EVAL_SUBDIR=""
 
 # ---------------------------------------------------------------------------
 # Mode: distill — SFT on teacher's final checkpoint, then GRPO
@@ -193,6 +196,9 @@ elif [ "$DISTILL_MODE" = "distill" ]; then
 
     # 3. GRPO starting from SFT checkpoint (only if --GRPO specified)
     TRAIN_JID=""
+    FINAL_JID="${SFT_JID}"
+    FINAL_EVAL_CKPT="${sft_ckpt_dir}"
+    FINAL_EVAL_SUBDIR="sft_final"
     if [ -n "$RUN_GRPO" ]; then
         MODEL_PATH="${sft_ckpt_dir}" \
         TRAIN_JID=$(sbatch --parsable \
@@ -201,6 +207,9 @@ elif [ "$DISTILL_MODE" = "distill" ]; then
             $TRAIN_SBATCH_ARGS \
             scripts/train_grpo.sh)
         echo "Train:  job $TRAIN_JID (GRPO from SFT checkpoint)"
+        FINAL_JID="${TRAIN_JID}"
+        FINAL_EVAL_CKPT=""
+        FINAL_EVAL_SUBDIR=""
     fi
 
 # ---------------------------------------------------------------------------
@@ -257,6 +266,9 @@ elif [ "$DISTILL_MODE" = "progdistill" ]; then
 
     # GRPO from final progressive SFT checkpoint (only if --GRPO specified)
     TRAIN_JID=""
+    FINAL_JID="${prev_sft_jid}"
+    FINAL_EVAL_CKPT="${final_sft_ckpt}"
+    FINAL_EVAL_SUBDIR="round_1600"
     if [ -n "$RUN_GRPO" ]; then
         MODEL_PATH="${final_sft_ckpt}" \
         TRAIN_JID=$(sbatch --parsable \
@@ -265,6 +277,9 @@ elif [ "$DISTILL_MODE" = "progdistill" ]; then
             $TRAIN_SBATCH_ARGS \
             scripts/train_grpo.sh)
         echo "Train:  job $TRAIN_JID (GRPO from progdistill round_1600 checkpoint)"
+        FINAL_JID="${TRAIN_JID}"
+        FINAL_EVAL_CKPT=""
+        FINAL_EVAL_SUBDIR=""
     fi
 
 else
@@ -273,22 +288,57 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Eval + plot — only submitted when a GRPO training job exists.
-# Without --GRPO, distill/progdistill runs stop at SFT.
+# Eval + plot — runs off FINAL_JID, which points at the final training stage
+# (GRPO for plain-RL / distill+GRPO / progdistill+GRPO; final SFT job for
+# distill-only / progdistill-only).
+#
+# When GRPO ran, eval uses its baked-in array over global_step_* checkpoints.
+# When only SFT ran, eval is submitted as a single non-array task per dataset
+# with EVAL_CHECKPOINT_PATH / EVAL_RESULT_PATH pointing at the final SFT dir.
 # ---------------------------------------------------------------------------
-if [ -n "${TRAIN_JID:-}" ]; then
-    EVAL_JID1=$(EVAL_DATASET=balanced  sbatch --parsable \
-        --partition=$_partition --account=$_account \
-        --dependency=afterok:${TRAIN_JID} \
-        scripts/eval.sh)
-    EVAL_JID2=$(EVAL_DATASET=balanced5 sbatch --parsable \
-        --partition=$_partition --account=$_account \
-        --dependency=afterok:${TRAIN_JID} \
-        scripts/eval.sh)
-    EVAL_JID3=$(EVAL_DATASET=balanced6 sbatch --parsable \
-        --partition=$_partition --account=$_account \
-        --dependency=afterok:${TRAIN_JID} \
-        scripts/eval.sh)
+if [ -n "${FINAL_JID:-}" ]; then
+    if [ -z "${TRAIN_JID:-}" ]; then
+        # SFT-only: eval the single final SFT checkpoint per dataset.
+        project_dir=${PROJECT_DIR:-$PWD}
+        eval_result_base=${project_dir}/results/${MODEL_NAME}/${EXP_NAME}/${FINAL_EVAL_SUBDIR}
+        EVAL_JID1=$(EVAL_DATASET=balanced \
+            EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
+            EVAL_RESULT_PATH="${eval_result_base}" \
+            sbatch --parsable \
+                --partition=$_partition --account=$_account \
+                --array=1-1 \
+                --dependency=afterok:${FINAL_JID} \
+                scripts/eval.sh)
+        EVAL_JID2=$(EVAL_DATASET=balanced5 \
+            EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
+            EVAL_RESULT_PATH="${eval_result_base}" \
+            sbatch --parsable \
+                --partition=$_partition --account=$_account \
+                --array=1-1 \
+                --dependency=afterok:${FINAL_JID} \
+                scripts/eval.sh)
+        EVAL_JID3=$(EVAL_DATASET=balanced6 \
+            EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
+            EVAL_RESULT_PATH="${eval_result_base}" \
+            sbatch --parsable \
+                --partition=$_partition --account=$_account \
+                --array=1-1 \
+                --dependency=afterok:${FINAL_JID} \
+                scripts/eval.sh)
+    else
+        EVAL_JID1=$(EVAL_DATASET=balanced  sbatch --parsable \
+            --partition=$_partition --account=$_account \
+            --dependency=afterok:${FINAL_JID} \
+            scripts/eval.sh)
+        EVAL_JID2=$(EVAL_DATASET=balanced5 sbatch --parsable \
+            --partition=$_partition --account=$_account \
+            --dependency=afterok:${FINAL_JID} \
+            scripts/eval.sh)
+        EVAL_JID3=$(EVAL_DATASET=balanced6 sbatch --parsable \
+            --partition=$_partition --account=$_account \
+            --dependency=afterok:${FINAL_JID} \
+            scripts/eval.sh)
+    fi
     echo "Eval:   job $EVAL_JID1 (n=3,4)  $EVAL_JID2 (n=5)  $EVAL_JID3 (n=6)"
 
     PLOT_JID=$(sbatch --parsable \
@@ -296,10 +346,6 @@ if [ -n "${TRAIN_JID:-}" ]; then
         --dependency=afterok:${EVAL_JID1}:${EVAL_JID2}:${EVAL_JID3} \
         scripts/plot_results.sh)
     echo "Plot:   job $PLOT_JID"
-else
-    echo ""
-    echo "SFT-only run — no GRPO, eval, or plot submitted."
-    echo "Re-run with --GRPO to continue into RL, eval, and plotting."
 fi
 
 echo ""

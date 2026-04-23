@@ -148,20 +148,20 @@ assert_contains "Plot job targets plot_results.sh" "plot_results.sh" "$call5"
 teardown_workspace
 
 # ---------------------------------------------------------------------------
-# Test: --distill mode
+# Test: --distill mode (no --GRPO) — SFT only, eval against final SFT dir
 # ---------------------------------------------------------------------------
 echo ""
-echo "=== Test: --distill mode ==="
+echo "=== Test: --distill mode (no --GRPO) ==="
 setup_workspace
 OUTPUT=$(run_pipeline --distill teacher-exp-name)
 
 total=$(count_sbatch_calls)
-# gendata(1) + sft(1) + grpo(1) + eval×3(3) + plot(1) = 7
-assert_eq "Total sbatch calls for --distill (7)" "7" "$total"
+# gendata(1) + sft(1) + eval×3(3) + plot(1) = 6
+assert_eq "Total sbatch calls for --distill (6)" "6" "$total"
 
 assert_contains "Output mentions GenData" "GenData" "$OUTPUT"
 assert_contains "Output mentions SFT" "SFT" "$OUTPUT"
-assert_contains "Output mentions GRPO" "GRPO" "$OUTPUT"
+assert_not_contains "No GRPO job without --GRPO" "train_grpo.sh" "$(cat "$SBATCH_LOG")"
 
 # Job 1: gendata
 call1=$(sbatch_args_at 1)
@@ -173,16 +173,47 @@ call2=$(sbatch_args_at 2)
 assert_contains "Job 2 is train_sft.sh" "train_sft.sh" "$call2"
 assert_contains "SFT depends on gendata job" "afterok" "$call2"
 
+# Jobs 3,4,5: eval.sh (single-task, --array=1-1, depend on SFT)
+for i in 3 4 5; do
+    calli=$(sbatch_args_at $i)
+    assert_contains "Job $i is eval.sh" "eval.sh" "$calli"
+    assert_contains "Eval $i depends on SFT" "afterok" "$calli"
+    assert_contains "Eval $i uses --array=1-1 (SFT-only)" "array=1-1" "$calli"
+done
+
+# Job 6: plot
+call6=$(sbatch_args_at 6)
+assert_contains "Job 6 is plot_results.sh" "plot_results.sh" "$call6"
+
+teardown_workspace
+
+# ---------------------------------------------------------------------------
+# Test: --distill --GRPO mode — SFT then GRPO then eval array + plot
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Test: --distill --GRPO mode ==="
+setup_workspace
+OUTPUT=$(run_pipeline --distill teacher-exp-name --GRPO)
+
+total=$(count_sbatch_calls)
+# gendata(1) + sft(1) + grpo(1) + eval×3(3) + plot(1) = 7
+assert_eq "Total sbatch calls for --distill --GRPO (7)" "7" "$total"
+
+assert_contains "Output mentions GenData" "GenData" "$OUTPUT"
+assert_contains "Output mentions SFT" "SFT" "$OUTPUT"
+assert_contains "Output mentions GRPO" "GRPO" "$OUTPUT"
+
 # Job 3: GRPO depends on SFT
 call3=$(sbatch_args_at 3)
 assert_contains "Job 3 is train_grpo.sh" "train_grpo.sh" "$call3"
 assert_contains "GRPO depends on SFT" "afterok" "$call3"
 
-# Jobs 4,5,6: eval.sh
+# Jobs 4,5,6: eval.sh (default array, no --array=1-1 override, depend on GRPO)
 for i in 4 5 6; do
     calli=$(sbatch_args_at $i)
     assert_contains "Job $i is eval.sh" "eval.sh" "$calli"
     assert_contains "Eval $i depends on GRPO" "afterok" "$calli"
+    assert_not_contains "Eval $i does not use --array=1-1 (GRPO array mode)" "array=1-1" "$calli"
 done
 
 # Job 7: plot
@@ -192,22 +223,20 @@ assert_contains "Job 7 is plot_results.sh" "plot_results.sh" "$call7"
 teardown_workspace
 
 # ---------------------------------------------------------------------------
-# Test: --progdistill mode
+# Test: --progdistill mode (no --GRPO) — 10-round SFT chain, eval final round
 # ---------------------------------------------------------------------------
 echo ""
-echo "=== Test: --progdistill mode ==="
+echo "=== Test: --progdistill mode (no --GRPO) ==="
 setup_workspace
 OUTPUT=$(run_pipeline --progdistill teacher-exp-name)
 
 total=$(count_sbatch_calls)
-# 10 gendata + 10 sft + 1 grpo + 3 eval + 1 plot = 25
-assert_eq "Total sbatch calls for --progdistill (25)" "25" "$total"
+# 10 gendata + 10 sft + 3 eval + 1 plot = 24
+assert_eq "Total sbatch calls for --progdistill (24)" "24" "$total"
 
-# First 10 calls should be generate_sft_data.sh
 gendata_count=$(grep -c "generate_sft_data.sh" "$SBATCH_LOG" || true)
 assert_eq "10 generate_sft_data.sh calls" "10" "$gendata_count"
 
-# Next 10 calls should be train_sft.sh
 sft_count=$(grep -c "train_sft.sh" "$SBATCH_LOG" || true)
 assert_eq "10 train_sft.sh calls" "10" "$sft_count"
 
@@ -215,15 +244,51 @@ assert_eq "10 train_sft.sh calls" "10" "$sft_count"
 sft_with_dep=$(grep "train_sft.sh" "$SBATCH_LOG" | grep -c "afterok" || true)
 assert_eq "All 10 SFT jobs have dependencies" "10" "$sft_with_dep"
 
-# Exactly 1 GRPO job
+# No GRPO job without --GRPO
 grpo_count=$(grep -c "train_grpo.sh" "$SBATCH_LOG" || true)
-assert_eq "Exactly 1 train_grpo.sh call" "1" "$grpo_count"
+assert_eq "No train_grpo.sh call" "0" "$grpo_count"
 
-# Exactly 3 eval jobs
+# 3 eval jobs
 eval_count=$(grep -c "eval.sh" "$SBATCH_LOG" || true)
 assert_eq "Exactly 3 eval.sh calls" "3" "$eval_count"
 
-# Exactly 1 plot job
+# All 3 eval jobs use --array=1-1 (SFT-only mode)
+eval_array1=$(grep "eval.sh" "$SBATCH_LOG" | grep -c "array=1-1" || true)
+assert_eq "All 3 eval jobs use --array=1-1" "3" "$eval_array1"
+
+plot_count=$(grep -c "plot_results.sh" "$SBATCH_LOG" || true)
+assert_eq "Exactly 1 plot_results.sh call" "1" "$plot_count"
+
+teardown_workspace
+
+# ---------------------------------------------------------------------------
+# Test: --progdistill --GRPO mode
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Test: --progdistill --GRPO mode ==="
+setup_workspace
+OUTPUT=$(run_pipeline --progdistill teacher-exp-name --GRPO)
+
+total=$(count_sbatch_calls)
+# 10 gendata + 10 sft + 1 grpo + 3 eval + 1 plot = 25
+assert_eq "Total sbatch calls for --progdistill --GRPO (25)" "25" "$total"
+
+gendata_count=$(grep -c "generate_sft_data.sh" "$SBATCH_LOG" || true)
+assert_eq "10 generate_sft_data.sh calls" "10" "$gendata_count"
+
+sft_count=$(grep -c "train_sft.sh" "$SBATCH_LOG" || true)
+assert_eq "10 train_sft.sh calls" "10" "$sft_count"
+
+grpo_count=$(grep -c "train_grpo.sh" "$SBATCH_LOG" || true)
+assert_eq "Exactly 1 train_grpo.sh call" "1" "$grpo_count"
+
+eval_count=$(grep -c "eval.sh" "$SBATCH_LOG" || true)
+assert_eq "Exactly 3 eval.sh calls" "3" "$eval_count"
+
+# Eval jobs use the default array, NOT --array=1-1
+eval_array1=$(grep "eval.sh" "$SBATCH_LOG" | grep -c "array=1-1" || true)
+assert_eq "No eval job uses --array=1-1 in GRPO mode" "0" "$eval_array1"
+
 plot_count=$(grep -c "plot_results.sh" "$SBATCH_LOG" || true)
 assert_eq "Exactly 1 plot_results.sh call" "1" "$plot_count"
 
