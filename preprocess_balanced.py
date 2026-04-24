@@ -75,9 +75,7 @@ if __name__ == '__main__':
         train_dataset += data[10:]
         test_dataset += data[:10]
 
-    train_dataset = Dataset.from_list(train_dataset)
-
-    # Deduplicate by (sorted nums, target) - keep first occurrence
+    # Deduplicate test by (sorted nums, target) - keep first occurrence
     seen = set()
     deduped = []
     for item in test_dataset:
@@ -87,6 +85,19 @@ if __name__ == '__main__':
             deduped.append(item)
     test_dataset = deduped
 
+    # Filter train rows whose (sorted(nums), target) matches any test puzzle.
+    # Closes the leakage pathway where the same canonical puzzle appears under
+    # different pattern indices in train and test.
+    test_keys = set((tuple(sorted(item['nums'])), item['target']) for item in test_dataset)
+    before = len(train_dataset)
+    train_dataset = [
+        item for item in train_dataset
+        if (tuple(sorted(item['nums'])), item['target']) not in test_keys
+    ]
+    print(f"Train leakage filter (n=3,4): {before} -> {len(train_dataset)} rows "
+          f"({before - len(train_dataset)} removed)")
+
+    train_dataset = Dataset.from_list(train_dataset)
     test_dataset = Dataset.from_list(test_dataset)
     
     train_dataset = train_dataset.map(function=make_map_fn('train'), with_indices=True)

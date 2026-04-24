@@ -98,6 +98,34 @@ def _score_item(args):
 MAX_PROMPTS = 1000  # cap per file to keep scoring fast
 
 
+def _extract_eval_step(path):
+    """Extract the training step from a result path."""
+    m = re.search(r"global_step_(\d+)", path)
+    if m:
+        return int(m.group(1))
+
+    m = re.search(r"round_(\d+)", path)
+    if m:
+        return int(m.group(1))
+
+    if "/sft_final/" in path:
+        return 1600
+
+    return None
+
+
+def _result_files(result_dir, model_name, exp_name, eval_dataset):
+    patterns = [
+        os.path.join(result_dir, model_name, exp_name, "global_step_*", f"{eval_dataset}_temp*.json"),
+        os.path.join(result_dir, model_name, exp_name, "round_*", f"{eval_dataset}_temp*.json"),
+        os.path.join(result_dir, model_name, exp_name, "sft_final", f"{eval_dataset}_temp*.json"),
+    ]
+    files = []
+    for pattern in patterns:
+        files.extend(glob.glob(pattern))
+    return sorted(set(files), key=lambda path: (_extract_eval_step(path) is None, _extract_eval_step(path), path))
+
+
 def _score_checkpoint(path):
     """Return (step, mean1, mean32) for one result file, using .scores cache if fresh."""
     cache_path = path + ".scores"
@@ -110,12 +138,8 @@ def _score_checkpoint(path):
     except Exception:
         pass
 
-    m = re.search(r"global_step_(\d+)", path) or re.search(r"round_(\d+)", path)
-    if m:
-        step = int(m.group(1))
-    elif "sft_final" in path:
-        step = 0
-    else:
+    step = _extract_eval_step(path)
+    if step is None:
         return None
 
     t_load = time.time()
@@ -169,12 +193,8 @@ def _length_checkpoint(path, tokenizer):
     except Exception:
         pass
 
-    m = re.search(r"global_step_(\d+)", path) or re.search(r"round_(\d+)", path)
-    if m:
-        step = int(m.group(1))
-    elif "sft_final" in path:
-        step = 0
-    else:
+    step = _extract_eval_step(path)
+    if step is None:
         return None
 
     try:
@@ -201,10 +221,7 @@ def _length_checkpoint(path, tokenizer):
 
 def compute_mean_lengths(result_dir, model_name, exp_name, eval_dataset, tokenizer):
     """Return sorted list of (step, mean_tokens) for each checkpoint."""
-    base_dir = os.path.join(result_dir, model_name, exp_name)
-    files = []
-    for sub in ("global_step_*", "round_*", "sft_final"):
-        files.extend(glob.glob(os.path.join(base_dir, sub, f"{eval_dataset}_temp*.json")))
+    files = _result_files(result_dir, model_name, exp_name, eval_dataset)
     if not files:
         return []
 
@@ -227,17 +244,14 @@ def compute_mean_metrics(result_dir, model_name, exp_name, eval_dataset):
     Returns sorted list of (step, mean1, mean32), or [] if no results found.
     Uses .scores cache files to avoid re-scoring unchanged result files.
     """
-    base_dir = os.path.join(result_dir, model_name, exp_name)
-    files = []
-    for sub in ("global_step_*", "round_*", "sft_final"):
-        files.extend(glob.glob(os.path.join(base_dir, sub, f"{eval_dataset}_temp*.json")))
+    files = _result_files(result_dir, model_name, exp_name, eval_dataset)
     if not files:
         return []
 
     results = []
     for path in sorted(files):
-        m = re.search(r"global_step_(\d+)", path) or re.search(r"round_(\d+)", path)
-        label = f"step_{m.group(1)}" if m else ("sft_final" if "sft_final" in path else path)
+        step = _extract_eval_step(path)
+        label = f"step_{step}" if step is not None else path
         print(f"  Scoring {label}...", end=" ", flush=True)
         t0 = time.time()
         result = _score_checkpoint(path)
