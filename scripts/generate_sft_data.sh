@@ -62,6 +62,7 @@ if [ "${truncate}" = "true" ] || [ "${truncate}" = "1" ]; then
 fi
 
 output_path=${checkpoint_dir}/sft-data/${model_name}/${exp_name}/step_${teacher_step}.parquet
+metadata_path=${output_path}.metadata
 data_path=${project_dir}/data/${data_source}/train.parquet
 
 echo "============================================================"
@@ -106,5 +107,17 @@ python3 ${project_dir}/scripts/generate_sft_data.py \
     --n_responses ${n_responses} \
     --max_length ${max_length} \
     ${extra_args}
+
+mkdir -p "$(dirname "${metadata_path}")"
+{
+    echo "teacher_model_name=${teacher_model_name}"
+    echo "teacher_exp_name=${teacher_exp_name}"
+    echo "teacher_step=${teacher_step}"
+    echo "data_source=${data_source}"
+    echo "n_responses=${n_responses}"
+    echo "filter_correct_only=${filter_correct_only}"
+    echo "truncate=${truncate}"
+    echo "max_length=${max_length}"
+} > "${metadata_path}"
 
 chmod -R 770 ${checkpoint_dir}/sft-data/${model_name}/${exp_name}

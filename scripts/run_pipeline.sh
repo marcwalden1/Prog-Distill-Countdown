@@ -43,6 +43,7 @@
 #   N_RESPONSES                — teacher responses per prompt for data gen (default: 16)
 #   TEACHER_MODEL_NAME         — teacher arch/size for cross-size distill (default: MODEL_NAME = student)
 #   FILTER_CORRECT_ONLY        — keep only score==1.0 teacher responses (default: false; keeps all)
+#   SFT_DATA_SOURCE_EXP_NAME   — optional prior EXP_NAME to reuse existing SFT parquet data from
 
 set -euo pipefail
 
@@ -83,6 +84,7 @@ fi
 export MODEL_NAME=${MODEL_NAME:-Qwen2.5-1.5B}
 export EXP_NAME=${EXP_NAME:-balanced-grpo-seed1}
 export DATA_SOURCE=${DATA_SOURCE:-balanced}
+SFT_DATA_SOURCE_EXP_NAME=${SFT_DATA_SOURCE_EXP_NAME:-""}
 
 TRAIN_SBATCH_ARGS=${TRAIN_SBATCH_ARGS:-""}
 SFT_SBATCH_ARGS=${SFT_SBATCH_ARGS:-""}
@@ -93,7 +95,8 @@ if [ "$USER" = "mwalden" ]; then
     _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints
     _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models
     _account=kempner_kdbrantley_lab
-    _partition=kempner_h100
+    _train_partition=kempner_h100
+    _eval_partition=kempner_h100
     _plot_extra=""
     _plot_partition=serial_requeue
     _plot_account=kdbrantley_lab
@@ -101,7 +104,8 @@ elif [ "$USER" = "sdholakia" ]; then
     _checkpoint_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/rl-checkpoints
     _model_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/models
     _account=kempner_bingbin_lab
-    _partition=kempner_requeue
+    _train_partition=kempner_h100
+    _eval_partition=kempner_requeue
     _plot_extra="--gres=gpu:nvidia_h100_80gb_hbm3:1"
     _plot_partition=kempner_requeue
     _plot_account=kempner_bingbin_lab
@@ -131,7 +135,7 @@ submit_gendata() {
     N_RESPONSES="${N_RESPONSES:-16}" \
     FILTER_CORRECT_ONLY="${FILTER_CORRECT_ONLY:-false}" \
     sbatch --parsable \
-        --partition=$_partition --account=$_account \
+        --partition=$_train_partition --account=$_account \
         ${dep_arg} \
         ${SFT_SBATCH_ARGS} \
         scripts/generate_sft_data.sh
@@ -155,17 +159,98 @@ submit_sft() {
     SFT_LR="${SFT_LR:-1e-5}" \
     SFT_EXPERIMENT_LABEL="${sft_experiment_label}" \
     sbatch --parsable \
-        --partition=$_partition --account=$_account \
+        --partition=$_train_partition --account=$_account \
         ${dep_arg} \
         ${SFT_SBATCH_ARGS} \
         scripts/train_sft.sh
+}
+
+sft_data_path() {
+    local exp_name="$1"
+    local teacher_step="$2"
+    echo "${checkpoint_dir}/sft-data/${MODEL_NAME}/${exp_name}/step_${teacher_step}.parquet"
+}
+
+metadata_path() {
+    local data_path="$1"
+    echo "${data_path}.metadata"
+}
+
+metadata_matches() {
+    local data_path="$1"
+    local teacher_step="$2"
+    local meta_path
+
+    meta_path=$(metadata_path "${data_path}")
+    if [ ! -f "${meta_path}" ]; then
+        return 1
+    fi
+
+    local teacher_model_name_expected="${TEACHER_MODEL_NAME:-${MODEL_NAME}}"
+    local teacher_exp_name_actual=""
+    local teacher_model_name_actual=""
+    local teacher_step_actual=""
+    local data_source_actual=""
+    local n_responses_actual=""
+    local filter_correct_only_actual=""
+    local truncate_actual=""
+    local max_length_actual=""
+
+    while IFS='=' read -r key value; do
+        case "${key}" in
+            teacher_exp_name) teacher_exp_name_actual="${value}" ;;
+            teacher_model_name) teacher_model_name_actual="${value}" ;;
+            teacher_step) teacher_step_actual="${value}" ;;
+            data_source) data_source_actual="${value}" ;;
+            n_responses) n_responses_actual="${value}" ;;
+            filter_correct_only) filter_correct_only_actual="${value}" ;;
+            truncate) truncate_actual="${value}" ;;
+            max_length) max_length_actual="${value}" ;;
+        esac
+    done < "${meta_path}"
+
+    [ "${teacher_exp_name_actual}" = "${TEACHER_EXP_NAME}" ] || return 1
+    [ "${teacher_model_name_actual}" = "${teacher_model_name_expected}" ] || return 1
+    [ "${teacher_step_actual}" = "${teacher_step}" ] || return 1
+    [ "${data_source_actual}" = "${DATA_SOURCE}" ] || return 1
+    [ "${n_responses_actual}" = "${N_RESPONSES:-16}" ] || return 1
+    [ "${filter_correct_only_actual}" = "${FILTER_CORRECT_ONLY:-false}" ] || return 1
+    [ "${truncate_actual}" = "${TRUNCATE:-false}" ] || return 1
+    [ "${max_length_actual}" = "${MAX_LENGTH:-1024}" ] || return 1
+}
+
+prepare_sft_data() {
+    local teacher_step="$1"
+    local current_path
+    local source_path=""
+
+    current_path=$(sft_data_path "${EXP_NAME}" "${teacher_step}")
+    LAST_SFT_DATA_PATH="${current_path}"
+    LAST_GENDATA_JID=""
+    LAST_GENDATA_ACTION="generate"
+
+    if [ -f "${current_path}" ] && metadata_matches "${current_path}" "${teacher_step}"; then
+        LAST_GENDATA_ACTION="reuse-current"
+        return
+    fi
+
+    if [ -n "${SFT_DATA_SOURCE_EXP_NAME}" ] && [ "${SFT_DATA_SOURCE_EXP_NAME}" != "${EXP_NAME}" ]; then
+        source_path=$(sft_data_path "${SFT_DATA_SOURCE_EXP_NAME}" "${teacher_step}")
+        if [ -f "${source_path}" ] && metadata_matches "${source_path}" "${teacher_step}"; then
+            LAST_SFT_DATA_PATH="${source_path}"
+            LAST_GENDATA_ACTION="reuse-source"
+            return
+        fi
+    fi
+
+    LAST_GENDATA_JID=$(submit_gendata "${teacher_step}")
 }
 
 # ---------------------------------------------------------------------------
 # Mode: plain RL (no distillation)
 # ---------------------------------------------------------------------------
 if [ -z "$DISTILL_MODE" ]; then
-    TRAIN_JID=$(sbatch --parsable --account=$_account --partition=$_partition $TRAIN_SBATCH_ARGS scripts/train_grpo.sh)
+    TRAIN_JID=$(sbatch --parsable --account=$_account --partition=$_train_partition $TRAIN_SBATCH_ARGS scripts/train_grpo.sh)
     echo "Train:  job $TRAIN_JID"
     FINAL_JID="${TRAIN_JID}"
     FINAL_EVAL_CKPT=""
@@ -175,14 +260,21 @@ if [ -z "$DISTILL_MODE" ]; then
 # Mode: distill — SFT on teacher's final checkpoint, then GRPO
 # ---------------------------------------------------------------------------
 elif [ "$DISTILL_MODE" = "distill" ]; then
-    sft_data_path=${checkpoint_dir}/sft-data/${MODEL_NAME}/${EXP_NAME}/step_final.parquet
     sft_ckpt_dir=${checkpoint_dir}/sft-checkpoints/${MODEL_NAME}/${EXP_NAME}
     base_model_path=${model_dir}/${MODEL_NAME}
     sft_steps=${SFT_TRAIN_STEPS:-1600}
 
     # 1. Generate SFT data from teacher's final checkpoint
-    GENDATA_JID=$(submit_gendata "final")
-    echo "GenData: job $GENDATA_JID (teacher final checkpoint)"
+    prepare_sft_data "final"
+    sft_data_path="${LAST_SFT_DATA_PATH}"
+    GENDATA_JID="${LAST_GENDATA_JID}"
+    if [ -n "${GENDATA_JID}" ]; then
+        echo "GenData: job $GENDATA_JID (teacher final checkpoint)"
+        sft_dep="--dependency=afterok:${GENDATA_JID}"
+    else
+        echo "GenData: reuse ${sft_data_path}"
+        sft_dep=""
+    fi
 
     # 2. SFT on base model
     SFT_JID=$(submit_sft \
@@ -191,7 +283,7 @@ elif [ "$DISTILL_MODE" = "distill" ]; then
         "${sft_ckpt_dir}" \
         "${sft_steps}" \
         "sft" \
-        "--dependency=afterok:${GENDATA_JID}")
+        "${sft_dep}")
     echo "SFT:    job $SFT_JID (${sft_steps} steps)"
 
     # 3. GRPO starting from SFT checkpoint (only if --GRPO specified)
@@ -202,7 +294,7 @@ elif [ "$DISTILL_MODE" = "distill" ]; then
     if [ -n "$RUN_GRPO" ]; then
         MODEL_PATH="${sft_ckpt_dir}" \
         TRAIN_JID=$(sbatch --parsable \
-            --account=$_account --partition=$_partition \
+            --account=$_account --partition=$_train_partition \
             --dependency=afterok:${SFT_JID} \
             $TRAIN_SBATCH_ARGS \
             scripts/train_grpo.sh)
@@ -218,7 +310,6 @@ elif [ "$DISTILL_MODE" = "distill" ]; then
 # ---------------------------------------------------------------------------
 elif [ "$DISTILL_MODE" = "progdistill" ]; then
     sft_ckpt_base=${checkpoint_dir}/sft-checkpoints/${MODEL_NAME}/${EXP_NAME}
-    sft_data_base=${checkpoint_dir}/sft-data/${MODEL_NAME}/${EXP_NAME}
     base_model_path=${model_dir}/${MODEL_NAME}
 
     # Teacher checkpoints: the 10 steps at which eval.sh evaluates
@@ -230,19 +321,18 @@ elif [ "$DISTILL_MODE" = "progdistill" ]; then
     prev_sft_ckpt="${base_model_path}"
 
     for step in "${teacher_steps[@]}"; do
-        sft_data_path=${sft_data_base}/step_${step}.parquet
         sft_out_dir=${sft_ckpt_base}/round_${step}
+        prepare_sft_data "${step}"
+        sft_data_path="${LAST_SFT_DATA_PATH}"
+        GENDATA_JID="${LAST_GENDATA_JID}"
 
-        # Generate SFT data (no dependency on prior SFT — data gen is independent)
-        if [ -z "${prev_sft_jid}" ]; then
-            GENDATA_JID=$(submit_gendata "${step}")
-        else
-            # Still no dependency on SFT; runs in parallel with prior SFT round
-            GENDATA_JID=$(submit_gendata "${step}")
-        fi
-
-        # SFT depends on: (a) data for this step, (b) previous SFT round
-        if [ -z "${prev_sft_jid}" ]; then
+        # SFT depends on: (a) data for this step if it must be generated,
+        # (b) previous SFT round
+        if [ -z "${GENDATA_JID}" ] && [ -z "${prev_sft_jid}" ]; then
+            dep=""
+        elif [ -z "${GENDATA_JID}" ]; then
+            dep="--dependency=afterok:${prev_sft_jid}"
+        elif [ -z "${prev_sft_jid}" ]; then
             dep="--dependency=afterok:${GENDATA_JID}"
         else
             dep="--dependency=afterok:${GENDATA_JID}:${prev_sft_jid}"
@@ -256,7 +346,11 @@ elif [ "$DISTILL_MODE" = "progdistill" ]; then
             "sft-round-${step}" \
             "${dep}")
 
-        echo "Step ${step}: GenData=$GENDATA_JID  SFT=$SFT_JID  (base: $(basename ${prev_sft_ckpt}))"
+        if [ -n "${GENDATA_JID}" ]; then
+            echo "Step ${step}: GenData=$GENDATA_JID  SFT=$SFT_JID  (base: $(basename ${prev_sft_ckpt}))"
+        else
+            echo "Step ${step}: ReuseData=$(basename "${sft_data_path}")  SFT=$SFT_JID  (base: $(basename ${prev_sft_ckpt}))"
+        fi
 
         prev_sft_jid="${SFT_JID}"
         prev_sft_ckpt="${sft_ckpt_base}/round_${step}"
@@ -272,7 +366,7 @@ elif [ "$DISTILL_MODE" = "progdistill" ]; then
     if [ -n "$RUN_GRPO" ]; then
         MODEL_PATH="${final_sft_ckpt}" \
         TRAIN_JID=$(sbatch --parsable \
-            --account=$_account --partition=$_partition \
+            --account=$_account --partition=$_train_partition \
             --dependency=afterok:${prev_sft_jid} \
             $TRAIN_SBATCH_ARGS \
             scripts/train_grpo.sh)
@@ -305,7 +399,7 @@ if [ -n "${FINAL_JID:-}" ]; then
             EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
             EVAL_RESULT_PATH="${eval_result_base}" \
             sbatch --parsable \
-                --partition=$_partition --account=$_account \
+                --partition=$_eval_partition --account=$_account \
                 --array=1-1 \
                 --dependency=afterok:${FINAL_JID} \
                 scripts/eval.sh)
@@ -313,7 +407,7 @@ if [ -n "${FINAL_JID:-}" ]; then
             EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
             EVAL_RESULT_PATH="${eval_result_base}" \
             sbatch --parsable \
-                --partition=$_partition --account=$_account \
+                --partition=$_eval_partition --account=$_account \
                 --array=1-1 \
                 --dependency=afterok:${FINAL_JID} \
                 scripts/eval.sh)
@@ -321,21 +415,21 @@ if [ -n "${FINAL_JID:-}" ]; then
             EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
             EVAL_RESULT_PATH="${eval_result_base}" \
             sbatch --parsable \
-                --partition=$_partition --account=$_account \
+                --partition=$_eval_partition --account=$_account \
                 --array=1-1 \
                 --dependency=afterok:${FINAL_JID} \
                 scripts/eval.sh)
     else
         EVAL_JID1=$(EVAL_DATASET=balanced  sbatch --parsable \
-            --partition=$_partition --account=$_account \
+            --partition=$_eval_partition --account=$_account \
             --dependency=afterok:${FINAL_JID} \
             scripts/eval.sh)
         EVAL_JID2=$(EVAL_DATASET=balanced5 sbatch --parsable \
-            --partition=$_partition --account=$_account \
+            --partition=$_eval_partition --account=$_account \
             --dependency=afterok:${FINAL_JID} \
             scripts/eval.sh)
         EVAL_JID3=$(EVAL_DATASET=balanced6 sbatch --parsable \
-            --partition=$_partition --account=$_account \
+            --partition=$_eval_partition --account=$_account \
             --dependency=afterok:${FINAL_JID} \
             scripts/eval.sh)
     fi

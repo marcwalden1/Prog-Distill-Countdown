@@ -262,6 +262,83 @@ assert_eq "Exactly 1 plot_results.sh call" "1" "$plot_count"
 teardown_workspace
 
 # ---------------------------------------------------------------------------
+# Test: --progdistill reuses existing SFT data before submitting gen-data jobs
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Test: --progdistill reuses existing SFT data ==="
+setup_workspace
+mkdir -p "${CHECKPOINT_DIR}/sft-data/Qwen2.5-0.5B/source-exp"
+touch "${CHECKPOINT_DIR}/sft-data/Qwen2.5-0.5B/source-exp/step_150.parquet"
+touch "${CHECKPOINT_DIR}/sft-data/Qwen2.5-0.5B/source-exp/step_300.parquet"
+cat > "${CHECKPOINT_DIR}/sft-data/Qwen2.5-0.5B/source-exp/step_150.parquet.metadata" <<'EOF'
+teacher_model_name=Qwen2.5-0.5B
+teacher_exp_name=teacher-exp-name
+teacher_step=150
+data_source=balanced
+n_responses=16
+filter_correct_only=false
+truncate=false
+max_length=1024
+EOF
+cat > "${CHECKPOINT_DIR}/sft-data/Qwen2.5-0.5B/source-exp/step_300.parquet.metadata" <<'EOF'
+teacher_model_name=Qwen2.5-0.5B
+teacher_exp_name=teacher-exp-name
+teacher_step=300
+data_source=balanced
+n_responses=16
+filter_correct_only=false
+truncate=false
+max_length=1024
+EOF
+OUTPUT=$(SFT_DATA_SOURCE_EXP_NAME=source-exp run_pipeline --progdistill teacher-exp-name)
+
+total=$(count_sbatch_calls)
+# 8 gendata + 10 sft + 3 eval + 1 plot = 22
+assert_eq "Total sbatch calls for --progdistill with reused data (22)" "22" "$total"
+
+gendata_count=$(grep -c "generate_sft_data.sh" "$SBATCH_LOG" || true)
+assert_eq "Only 8 generate_sft_data.sh calls when 2 steps are reused" "8" "$gendata_count"
+
+sft_count=$(grep -c "train_sft.sh" "$SBATCH_LOG" || true)
+assert_eq "10 train_sft.sh calls with reused data" "10" "$sft_count"
+
+assert_contains "Output notes reused step_150 parquet" "Step 150: ReuseData=step_150.parquet" "$OUTPUT"
+assert_contains "Output notes reused step_300 parquet" "Step 300: ReuseData=step_300.parquet" "$OUTPUT"
+
+teardown_workspace
+
+# ---------------------------------------------------------------------------
+# Test: --progdistill does not reuse mismatched SFT data metadata
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== Test: --progdistill rejects mismatched SFT data metadata ==="
+setup_workspace
+mkdir -p "${CHECKPOINT_DIR}/sft-data/Qwen2.5-0.5B/source-exp"
+touch "${CHECKPOINT_DIR}/sft-data/Qwen2.5-0.5B/source-exp/step_150.parquet"
+cat > "${CHECKPOINT_DIR}/sft-data/Qwen2.5-0.5B/source-exp/step_150.parquet.metadata" <<'EOF'
+teacher_model_name=Qwen2.5-0.5B
+teacher_exp_name=wrong-teacher-exp
+teacher_step=150
+data_source=balanced
+n_responses=16
+filter_correct_only=false
+truncate=false
+max_length=1024
+EOF
+OUTPUT=$(SFT_DATA_SOURCE_EXP_NAME=source-exp run_pipeline --progdistill teacher-exp-name)
+
+total=$(count_sbatch_calls)
+# All 10 gendata + 10 sft + 3 eval + 1 plot = 24
+assert_eq "Total sbatch calls for --progdistill with mismatched metadata (24)" "24" "$total"
+
+gendata_count=$(grep -c "generate_sft_data.sh" "$SBATCH_LOG" || true)
+assert_eq "All 10 generate_sft_data.sh calls happen when metadata mismatches" "10" "$gendata_count"
+
+assert_not_contains "Mismatched step_150 parquet is not reused" "Step 150: ReuseData=step_150.parquet" "$OUTPUT"
+
+teardown_workspace
+
+# ---------------------------------------------------------------------------
 # Test: --progdistill --GRPO mode
 # ---------------------------------------------------------------------------
 echo ""
