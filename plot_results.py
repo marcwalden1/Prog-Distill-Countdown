@@ -110,10 +110,13 @@ def _score_checkpoint(path):
     except Exception:
         pass
 
-    m = re.search(r"global_step_(\d+)", path)
-    if not m:
+    m = re.search(r"global_step_(\d+)", path) or re.search(r"round_(\d+)", path)
+    if m:
+        step = int(m.group(1))
+    elif "sft_final" in path:
+        step = 0
+    else:
         return None
-    step = int(m.group(1))
 
     t_load = time.time()
     try:
@@ -166,10 +169,13 @@ def _length_checkpoint(path, tokenizer):
     except Exception:
         pass
 
-    m = re.search(r"global_step_(\d+)", path)
-    if not m:
+    m = re.search(r"global_step_(\d+)", path) or re.search(r"round_(\d+)", path)
+    if m:
+        step = int(m.group(1))
+    elif "sft_final" in path:
+        step = 0
+    else:
         return None
-    step = int(m.group(1))
 
     try:
         with open(path) as f:
@@ -195,12 +201,10 @@ def _length_checkpoint(path, tokenizer):
 
 def compute_mean_lengths(result_dir, model_name, exp_name, eval_dataset, tokenizer):
     """Return sorted list of (step, mean_tokens) for each checkpoint."""
-    pattern = os.path.join(
-        result_dir, model_name, exp_name,
-        "global_step_*",
-        f"{eval_dataset}_temp*.json",
-    )
-    files = glob.glob(pattern)
+    base_dir = os.path.join(result_dir, model_name, exp_name)
+    files = []
+    for sub in ("global_step_*", "round_*", "sft_final"):
+        files.extend(glob.glob(os.path.join(base_dir, sub, f"{eval_dataset}_temp*.json")))
     if not files:
         return []
 
@@ -223,19 +227,17 @@ def compute_mean_metrics(result_dir, model_name, exp_name, eval_dataset):
     Returns sorted list of (step, mean1, mean32), or [] if no results found.
     Uses .scores cache files to avoid re-scoring unchanged result files.
     """
-    pattern = os.path.join(
-        result_dir, model_name, exp_name,
-        "global_step_*",
-        f"{eval_dataset}_temp*.json",
-    )
-    files = glob.glob(pattern)
+    base_dir = os.path.join(result_dir, model_name, exp_name)
+    files = []
+    for sub in ("global_step_*", "round_*", "sft_final"):
+        files.extend(glob.glob(os.path.join(base_dir, sub, f"{eval_dataset}_temp*.json")))
     if not files:
         return []
 
     results = []
     for path in sorted(files):
-        m = re.search(r"global_step_(\d+)", path)
-        label = f"step_{m.group(1)}" if m else path
+        m = re.search(r"global_step_(\d+)", path) or re.search(r"round_(\d+)", path)
+        label = f"step_{m.group(1)}" if m else ("sft_final" if "sft_final" in path else path)
         print(f"  Scoring {label}...", end=" ", flush=True)
         t0 = time.time()
         result = _score_checkpoint(path)
