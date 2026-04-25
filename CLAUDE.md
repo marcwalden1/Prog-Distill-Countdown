@@ -262,9 +262,9 @@ Each round saves only at its final step (`save_freq=-1` in `train_sft.sh`); if a
     tail -f logs/generate_sft_data.sh-<first-gendata-jid>-*.out      # watch first round's data gen
     ls $CHECKPOINT_DIR/sft-checkpoints/<MODEL_NAME>/<EXP_NAME>/      # round_150 appears ~30-60m after SFT starts
 
-### Required local verl patch (uncommitted)
+### Required local verl patch (committed on `local-fixes` branch)
 
-Each round's SFT runs only `PROGDISTILL_STEPS_PER_ROUND` (160) optimizer steps with `trainer.total_epochs=9999` + `trainer.total_training_steps=160`. Stock verl's `_build_model_optimizer` (in `verl/verl/trainer/fsdp_sft_trainer.py`) sizes the LR scheduler off `steps_per_epoch * total_epochs` (~6M steps) and ignores `total_training_steps`, so warmup never finishes and the effective LR collapses to ≈ `2.6e-4 × SFT_LR`. With the bug present, `SFT_LR` has no observable effect and the student barely trains.
+Each round's SFT runs only `PROGDISTILL_STEPS_PER_ROUND` (160) optimizer steps with `trainer.total_epochs=9999` + `trainer.total_training_steps=160`. Stock verl's `_build_model_optimizer` (in `verl/verl/trainer/fsdp_sft_trainer.py`) sizes the LR scheduler off `steps_per_epoch * total_epochs` (~6M steps) and ignores `total_training_steps`, so warmup never finishes and the effective LR collapses to ~`step/total_training_steps × peak`. With the bug present, `SFT_LR` has no observable effect and the student barely trains.
 
 The fix is a 5-line edit in `_build_model_optimizer` to prefer `trainer.total_training_steps` when set (mirrors the pattern already used in `fit()`):
 
@@ -273,7 +273,17 @@ The fix is a 5-line edit in `_build_model_optimizer` to prefer `trainer.total_tr
     else:
         self.total_steps = self.steps_per_epoch * self.config.trainer.total_epochs
 
-This is **not committed to the verl fork** (deliberately — the fork is brittle). Anyone running progdistill on a fresh checkout must apply it manually, or SFT will train at LR ≈ 0. Diagnose by tailing `logs/train_sft.sh-<jid>-*.out` and looking at `train/lr(1e-3)`: it should peak near `SFT_LR * 1e3`, not orders of magnitude lower.
+This is committed to the verl checkout on the **`local-fixes`** branch (forked from the pinned `083da9a` commit). The parent repo ignores `verl/`, so the patch only lives on this machine — fresh clones must reapply.
+
+To check / restore the patch on this checkout:
+
+    cd verl
+    git branch --show-current   # should print: local-fixes
+    git log --oneline -2         # top commit: "fsdp_sft_trainer: prefer trainer.total_training_steps for LR schedule"
+
+If a `git pull` ever needs to bump the verl pin, do `git rebase main local-fixes` inside `verl/` rather than `git checkout main` (which would lose the patch).
+
+Diagnose at runtime by tailing `logs/train_sft.sh-<jid>-*.out` and looking at `train/lr(1e-3)`: with the patch live it peaks near `SFT_LR * 1000` (e.g. ~0.01 for `SFT_LR=1e-5`, ~1.0 for `SFT_LR=1e-3`) at ~10% of `total_training_steps`, then decays via cosine to ~0. Without the patch it ramps linearly from 0 to ~`SFT_LR * (total_training_steps / 624,375) * 1000` over the whole run and never decays.
 
 ---
 
