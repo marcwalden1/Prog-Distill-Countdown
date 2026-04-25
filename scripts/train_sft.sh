@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:4
+#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:1
 #SBATCH -N 1 -n 1
 #SBATCH --mem-per-gpu=96G
 #SBATCH --cpus-per-gpu 8
@@ -15,6 +15,14 @@ conda activate verl
 export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 export WANDB_MODE="online"
 export WANDB_ENTITY="progressive_distill"
+
+# Tag this wandb run by pipeline mode so progdistill/distill SFT runs are filterable.
+# DISTILL_MODE is set by run_pipeline.sh; falls back to "sft" when SFT is run standalone.
+_sft_tags="sft"
+if [ -n "${DISTILL_MODE:-}" ]; then
+    _sft_tags="${DISTILL_MODE},sft"
+fi
+export WANDB_TAGS="${WANDB_TAGS:-${_sft_tags}}"
 
 # User-specific default paths
 if [ "$USER" = "mwalden" ]; then

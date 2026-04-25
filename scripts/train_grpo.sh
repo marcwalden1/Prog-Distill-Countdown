@@ -15,6 +15,14 @@ conda activate verl
 
 export WANDB_MODE="online"
 export WANDB_ENTITY="progressive_distill"
+
+# Tag this wandb run so the post-distill GRPO leg is filterable alongside its SFT rounds.
+# DISTILL_MODE is set by run_pipeline.sh when this is the final GRPO stage of a (prog)distill chain.
+_grpo_tags="grpo"
+if [ -n "${DISTILL_MODE:-}" ]; then
+    _grpo_tags="${DISTILL_MODE},grpo"
+fi
+export WANDB_TAGS="${WANDB_TAGS:-${_grpo_tags}}"
 export RAY_DISABLE_DASHBOARD=1
 export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 

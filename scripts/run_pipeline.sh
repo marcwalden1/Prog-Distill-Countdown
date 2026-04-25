@@ -84,6 +84,10 @@ if [ -z "$DISTILL_MODE" ]; then
     RUN_GRPO=1
 fi
 
+# Export so sbatch'd child scripts (train_grpo.sh, train_sft.sh) can derive WANDB_TAGS
+export DISTILL_MODE
+export RUN_GRPO
+
 export MODEL_NAME=${MODEL_NAME:-Qwen2.5-1.5B}
 export EXP_NAME=${EXP_NAME:-balanced-grpo-seed1}
 export DATA_SOURCE=${DATA_SOURCE:-balanced}
