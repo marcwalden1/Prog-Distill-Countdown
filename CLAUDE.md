@@ -193,6 +193,77 @@ This submits:
 
 ---
 
+## Progressive distillation
+
+Distills a trained GRPO teacher into a student across 10 rounds. Each round: (gen-data-from-teacher-at-step-X → SFT-student), for X ∈ {150, 300, 450, 600, 750, 900, 1050, 1200, 1400, 1600}. Each round runs `PROGDISTILL_STEPS_PER_ROUND` SFT steps (default 160 → total SFT budget 1600). Entry point: `scripts/run_pipeline.sh --progdistill <teacher-EXP_NAME>`.
+
+### Prerequisites
+
+Teacher must have checkpoints at all 10 required steps. Verify:
+
+    ls -d $CHECKPOINT_DIR/checkpoints/$TEACHER_MODEL_NAME/<teacher-EXP_NAME>/global_step_{150,300,450,600,750,900,1050,1200,1400,1600} 2>/dev/null | wc -l
+    # expect: 10
+
+### Standard command (cross-size: 1.5B teacher → 0.5B student)
+
+    MODEL_NAME=Qwen2.5-0.5B \
+    EXP_NAME=balanced-progdistill-teacher-<teacher-tag>-sftlr<lr>-seed1 \
+    TEACHER_MODEL_NAME=Qwen2.5-1.5B \
+    SFT_LR=1e-5 \
+    bash scripts/run_pipeline.sh --progdistill <teacher-EXP_NAME>
+
+Submits **23 jobs** in one dependency chain:
+- 10 × `generate_sft_data.sh` (H100, 4h, run in parallel as GPUs free up)
+- 10 × `train_sft.sh` (sequential, each depends on prior round's SFT + its own gen-data)
+- 3 × `eval.sh` (one per dataset: `balanced`, `balanced5`, `balanced6`) depending on round_1600 SFT
+- 1 × `plot_results.sh` depending on all 3 evals
+
+**Eval only hits `round_1600` by default.** For a curve across rounds, manually submit eval jobs on the intermediate SFT job IDs after submission.
+
+### Key env vars
+
+| Var | Default | Notes |
+|---|---|---|
+| `MODEL_NAME` | Qwen2.5-1.5B | student |
+| `TEACHER_MODEL_NAME` | `$MODEL_NAME` | set only for cross-size distillation |
+| `EXP_NAME` | required for reproducibility | put LR / teacher-tag in the name |
+| `SFT_LR` | 1e-5 | applies to all 10 rounds, no per-round override |
+| `PROGDISTILL_STEPS_PER_ROUND` | 160 | SFT steps per round |
+| `N_RESPONSES` | 4 | teacher samples per prompt during gen-data |
+| `TRUNCATE` | false | if true, keep only the final-attempt span of each teacher response |
+| `SFT_DATA_NAMESPACE` | derived | override; default is `teacher-<TEACHER_MODEL_NAME>-<TEACHER_EXP_NAME>-n<N_RESPONSES>[-truncate]` |
+| `FILTER_CORRECT_ONLY` | false | keep only score==1.0 responses |
+| `DATA_SOURCE` | balanced | `data/<dir>/train.parquet` as prompts |
+
+### Variants
+
+    # Progdistill + GRPO on top of round_1600
+    ... --progdistill <teacher-EXP_NAME> --GRPO
+
+    # Same-size (self) progdistill
+    MODEL_NAME=Qwen2.5-1.5B TEACHER_MODEL_NAME=Qwen2.5-1.5B ...
+
+    # Tune per-round step budget
+    PROGDISTILL_STEPS_PER_ROUND=100 ...
+
+### What lands on disk
+
+    $CHECKPOINT_DIR/sft-data/<MODEL_NAME>/teacher-<TEACHER_MODEL_NAME>-<TEACHER_EXP_NAME>-n<N_RESPONSES>[-truncate]/step_{150..1600}.parquet
+    $CHECKPOINT_DIR/sft-checkpoints/<MODEL_NAME>/<EXP_NAME>/round_{150..1600}/
+        └── model.safetensors + configs + tokenizer  (merged HF, ~1 GB for 0.5B)
+    results/<MODEL_NAME>/<EXP_NAME>/round_1600/{balanced,balanced5,balanced6}_*.json
+    figures/<MODEL_NAME>/<EXP_NAME>/*.png
+
+Each round saves only at its final step (`save_freq=-1` in `train_sft.sh`); if a round is killed mid-training it restarts from scratch. Use non-preemptible `kempner_h100` to avoid this. Intermediate FSDP shards are merged to HF format and deleted automatically.
+
+### Sanity checks after submission
+
+    squeue -u $USER                                                  # confirm 23 jobs queued
+    tail -f logs/generate_sft_data.sh-<first-gendata-jid>-*.out      # watch first round's data gen
+    ls $CHECKPOINT_DIR/sft-checkpoints/<MODEL_NAME>/<EXP_NAME>/      # round_150 appears ~30-60m after SFT starts
+
+---
+
 ## Evaluation: scripts/eval.sh + eval.py
 
 - Default array: `3,6,9,12,15,18,21,24,28,32` → evaluates checkpoints at steps 150, 300, 450, 600, 750, 900, 1050, 1200, 1400, 1600

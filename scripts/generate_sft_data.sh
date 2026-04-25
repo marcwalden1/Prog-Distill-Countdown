@@ -33,10 +33,18 @@ teacher_exp_name=${TEACHER_EXP_NAME:?TEACHER_EXP_NAME must be set}
 teacher_model_name=${TEACHER_MODEL_NAME:-${model_name}}
 teacher_step=${TEACHER_STEP:-final}
 data_source=${DATA_SOURCE:-balanced}
-n_responses=${N_RESPONSES:-16}
+n_responses=${N_RESPONSES:-4}
 max_length=${MAX_LENGTH:-1024}
 filter_correct_only=${FILTER_CORRECT_ONLY:-false}
 truncate=${TRUNCATE:-false}
+# Default namespace suffixes with -n${n_responses} (and -truncate when
+# truncate=true) so the pipeline and generate_sft_data.sh resolve to the
+# same directory. Must be computed *after* n_responses / truncate.
+_ns_default="teacher-${teacher_model_name}-${teacher_exp_name}-n${n_responses}"
+if [ "${truncate}" = "true" ] || [ "${truncate}" = "1" ]; then
+    _ns_default="${_ns_default}-truncate"
+fi
+sft_data_namespace=${SFT_DATA_NAMESPACE:-${_ns_default}}
 
 # Resolve teacher checkpoint path
 if [ "$teacher_step" = "final" ]; then
@@ -61,7 +69,7 @@ if [ "${truncate}" = "true" ] || [ "${truncate}" = "1" ]; then
     extra_args="${extra_args} --truncate"
 fi
 
-output_path=${checkpoint_dir}/sft-data/${model_name}/${exp_name}/step_${teacher_step}.parquet
+output_path=${checkpoint_dir}/sft-data/${model_name}/${sft_data_namespace}/step_${teacher_step}.parquet
 metadata_path=${output_path}.metadata
 data_path=${project_dir}/data/${data_source}/train.parquet
 
@@ -72,6 +80,7 @@ echo "SLURM Job ID:      ${SLURM_JOB_ID}"
 echo "Node:              $(hostname)"
 echo "Student model:     ${model_name}"
 echo "Exp name:          ${exp_name}"
+echo "Data namespace:    ${sft_data_namespace}"
 echo "Teacher model:     ${teacher_model_name}"
 echo "Teacher exp:       ${teacher_exp_name}"
 echo "Teacher step:      ${teacher_step}"
@@ -120,4 +129,4 @@ mkdir -p "$(dirname "${metadata_path}")"
     echo "max_length=${max_length}"
 } > "${metadata_path}"
 
-chmod -R 770 ${checkpoint_dir}/sft-data/${model_name}/${exp_name}
+chmod -R 770 ${checkpoint_dir}/sft-data/${model_name}/${sft_data_namespace}

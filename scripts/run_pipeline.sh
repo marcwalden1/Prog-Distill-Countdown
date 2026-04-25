@@ -40,10 +40,13 @@
 #   PROGDISTILL_STEPS_PER_ROUND — SFT steps per teacher checkpoint round (default: 50)
 #   SFT_TRAIN_STEPS            — total SFT steps for --distill mode (default: 1600, matches progdistill budget)
 #   SFT_LR                     — SFT learning rate (default: 1e-5)
-#   N_RESPONSES                — teacher responses per prompt for data gen (default: 16)
+#   N_RESPONSES                — teacher responses per prompt for data gen (default: 4)
 #   TEACHER_MODEL_NAME         — teacher arch/size for cross-size distill (default: MODEL_NAME = student)
 #   FILTER_CORRECT_ONLY        — keep only score==1.0 teacher responses (default: false; keeps all)
-#   SFT_DATA_SOURCE_EXP_NAME   — optional prior EXP_NAME to reuse existing SFT parquet data from
+#   SFT_DATA_NAMESPACE         — optional override for where generated SFT parquet data is stored
+#                                and reused; default is derived from the teacher checkpoint lineage
+#   SFT_DATA_SOURCE_EXP_NAME   — legacy override to reuse older SFT parquet data stored under a
+#                                previous EXP_NAME-based layout
 
 set -euo pipefail
 
@@ -84,6 +87,7 @@ fi
 export MODEL_NAME=${MODEL_NAME:-Qwen2.5-1.5B}
 export EXP_NAME=${EXP_NAME:-balanced-grpo-seed1}
 export DATA_SOURCE=${DATA_SOURCE:-balanced}
+SFT_DATA_NAMESPACE=${SFT_DATA_NAMESPACE:-""}
 SFT_DATA_SOURCE_EXP_NAME=${SFT_DATA_SOURCE_EXP_NAME:-""}
 
 TRAIN_SBATCH_ARGS=${TRAIN_SBATCH_ARGS:-""}
@@ -131,8 +135,9 @@ submit_gendata() {
     local dep_arg="${2:-}"  # e.g. "--dependency=afterok:12345" or ""
     TEACHER_EXP_NAME="${TEACHER_EXP_NAME}" \
     TEACHER_MODEL_NAME="${TEACHER_MODEL_NAME:-}" \
+    SFT_DATA_NAMESPACE="${SFT_DATA_NAMESPACE:-}" \
     TEACHER_STEP="${teacher_step}" \
-    N_RESPONSES="${N_RESPONSES:-16}" \
+    N_RESPONSES="${N_RESPONSES:-4}" \
     FILTER_CORRECT_ONLY="${FILTER_CORRECT_ONLY:-false}" \
     sbatch --parsable \
         --partition=$_train_partition --account=$_account \
@@ -165,10 +170,25 @@ submit_sft() {
         scripts/train_sft.sh
 }
 
+sft_data_namespace() {
+    if [ -n "${SFT_DATA_NAMESPACE}" ]; then
+        echo "${SFT_DATA_NAMESPACE}"
+    else
+        # Default namespace suffixes with -n${N_RESPONSES} so different rollout
+        # counts point at different data dirs; default N_RESPONSES=4. Truncated
+        # data gets an additional -truncate suffix.
+        local base="teacher-${TEACHER_MODEL_NAME:-${MODEL_NAME}}-${TEACHER_EXP_NAME}-n${N_RESPONSES:-4}"
+        if [ "${TRUNCATE:-false}" = "true" ] || [ "${TRUNCATE:-false}" = "1" ]; then
+            base="${base}-truncate"
+        fi
+        echo "${base}"
+    fi
+}
+
 sft_data_path() {
-    local exp_name="$1"
+    local data_namespace="$1"
     local teacher_step="$2"
-    echo "${checkpoint_dir}/sft-data/${MODEL_NAME}/${exp_name}/step_${teacher_step}.parquet"
+    echo "${checkpoint_dir}/sft-data/${MODEL_NAME}/${data_namespace}/step_${teacher_step}.parquet"
 }
 
 metadata_path() {
@@ -213,7 +233,7 @@ metadata_matches() {
     [ "${teacher_model_name_actual}" = "${teacher_model_name_expected}" ] || return 1
     [ "${teacher_step_actual}" = "${teacher_step}" ] || return 1
     [ "${data_source_actual}" = "${DATA_SOURCE}" ] || return 1
-    [ "${n_responses_actual}" = "${N_RESPONSES:-16}" ] || return 1
+    [ "${n_responses_actual}" = "${N_RESPONSES:-4}" ] || return 1
     [ "${filter_correct_only_actual}" = "${FILTER_CORRECT_ONLY:-false}" ] || return 1
     [ "${truncate_actual}" = "${TRUNCATE:-false}" ] || return 1
     [ "${max_length_actual}" = "${MAX_LENGTH:-1024}" ] || return 1
@@ -224,7 +244,7 @@ prepare_sft_data() {
     local current_path
     local source_path=""
 
-    current_path=$(sft_data_path "${EXP_NAME}" "${teacher_step}")
+    current_path=$(sft_data_path "$(sft_data_namespace)" "${teacher_step}")
     LAST_SFT_DATA_PATH="${current_path}"
     LAST_GENDATA_JID=""
     LAST_GENDATA_ACTION="generate"
