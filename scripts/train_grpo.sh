@@ -73,6 +73,7 @@ rm -rf /tmp/ray/ 2>/dev/null || true
 export RAY_TMPDIR=/tmp/ray_${SLURM_JOB_ID}
 ray start --head --num-gpus=${N_GPUS} --temp-dir=/tmp/ray_${SLURM_JOB_ID}
 
+set -o pipefail
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files="$train_path" \
@@ -128,8 +129,10 @@ python3 -m verl.trainer.main_ppo \
     critic.strategy=fsdp2 \
     reward_model.strategy=fsdp2 \
     actor_rollout_ref.rollout.enforce_eager=False \
-    actor_rollout_ref.rollout.free_cache_engine=True
-TRAIN_EXIT_CODE=$?
+    actor_rollout_ref.rollout.free_cache_engine=True \
+    2>&1 | python3 -u ${project_dir}/scripts/timestamp_filter.py
+TRAIN_EXIT_CODE=${PIPESTATUS[0]}
+set +o pipefail
 
 chmod -R 770 ${output_dir}/${exp_name}
 

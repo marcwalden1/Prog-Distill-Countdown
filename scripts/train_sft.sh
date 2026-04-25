@@ -66,6 +66,7 @@ echo "============================================================"
 
 cd ${project_dir}/verl
 
+set -o pipefail
 python3 -m torch.distributed.run \
     --nproc_per_node=${N_GPUS} \
     --master_addr=localhost \
@@ -92,8 +93,10 @@ python3 -m torch.distributed.run \
     trainer.save_freq=-1 \
     trainer.n_gpus_per_node=${N_GPUS} \
     trainer.nnodes=1 \
-    trainer.resume_mode=disable
-SFT_EXIT_CODE=$?
+    trainer.resume_mode=disable \
+    2>&1 | python3 -u ${project_dir}/scripts/timestamp_filter.py
+SFT_EXIT_CODE=${PIPESTATUS[0]}
+set +o pipefail
 
 if [ $SFT_EXIT_CODE -ne 0 ]; then
     echo "ERROR: SFT training failed with exit code $SFT_EXIT_CODE" >&2

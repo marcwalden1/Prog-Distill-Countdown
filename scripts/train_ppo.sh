@@ -27,6 +27,7 @@ output_dir=${CHECKPOINT_PATH:-${checkpoint_dir}/checkpoints/${model_name}}
 
 N_GPUS="$(( $(echo $SLURM_JOB_GPUS| grep -o , | wc -l) + 1 ))"
 
+set -o pipefail
 python3 -m verl.trainer.main_ppo \
     algorithm.adv_estimator=gae \
     data.train_files="$train_path" \
@@ -81,6 +82,11 @@ python3 -m verl.trainer.main_ppo \
     critic.strategy=fsdp2 \
     reward_model.strategy=fsdp2 \
     actor_rollout_ref.rollout.enforce_eager=False \
-    actor_rollout_ref.rollout.free_cache_engine=True
-    
+    actor_rollout_ref.rollout.free_cache_engine=True \
+    2>&1 | python3 -u ${project_dir}/scripts/timestamp_filter.py
+TRAIN_EXIT_CODE=${PIPESTATUS[0]}
+set +o pipefail
+
 chmod -R 770 ${output_dir}/${exp_name}
+
+exit $TRAIN_EXIT_CODE
