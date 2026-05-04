@@ -50,6 +50,8 @@ max_length=${MAX_LENGTH:-1024}
 kl_loss_coef=${KL_COEF:-0.001}
 lr=${LR:-1e-6}
 total_steps=${TOTAL_STEPS:-1635}
+rollout_n=${ROLLOUT_N:-4}
+val_kwargs_n=${VAL_KWARGS_N:-${rollout_n}}
 train_path=../data/${data_source}/train.parquet
 test_path=../data/${data_source}/test.parquet
 
@@ -70,6 +72,8 @@ echo "Data source:      ${data_source}"
 echo "Max length:       ${max_length}"
 echo "Learning rate:    ${lr}"
 echo "KL coef:          ${kl_loss_coef}"
+echo "Rollout n:        ${rollout_n}"
+echo "Val kwargs n:     ${val_kwargs_n}"
 echo "Total steps:      ${total_steps}"
 echo "Checkpoint path:  ${output_dir}/${exp_name}"
 echo "Project dir:      ${project_dir}"
@@ -109,8 +113,8 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
-    actor_rollout_ref.rollout.n=4 \
-    actor_rollout_ref.rollout.val_kwargs.n=4 \
+    actor_rollout_ref.rollout.n=${rollout_n} \
+    actor_rollout_ref.rollout.val_kwargs.n=${val_kwargs_n} \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=64 \

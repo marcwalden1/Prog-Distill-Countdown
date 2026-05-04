@@ -29,6 +29,7 @@ from vllm import LLM, SamplingParams
 # grader_utils.py is in the repo root; add it to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from grader_utils import compute_score
+from prompt_utils import render_prompt
 
 
 def truncate_to_final_attempt(response: str) -> str:
@@ -106,17 +107,7 @@ def main():
     # Build chat-formatted prompts for vLLM (same format as GRPO training)
     tokenizer = AutoTokenizer.from_pretrained(args.teacher_checkpoint_path)
 
-    formatted_prompts = []
-    for p in prompt_strings:
-        chat = [{"role": "user", "content": p}]
-        text = tokenizer.apply_chat_template(
-            chat,
-            add_generation_prompt=True,
-            tokenize=False,
-        )
-        # Append the partial assistant turn that training data always starts with
-        text += "Let me solve this step by step.\n<think>"
-        formatted_prompts.append(text)
+    formatted_prompts = [render_prompt(tokenizer, p, mode="sft_gen") for p in prompt_strings]
 
     sampling_params = SamplingParams(
         n=args.n_responses,

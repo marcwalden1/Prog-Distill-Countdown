@@ -1,10 +1,9 @@
 #!/bin/bash
-#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:1
+#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:1  # explicit H100: vLLM 0.8.5 crashes on MIG slices ('MIG-<uuid>' device IDs)
 #SBATCH -N 1 -n 1
 #SBATCH --mem-per-gpu=96G
 #SBATCH --cpus-per-gpu 8
 #SBATCH --partition=kempner_requeue
-#SBATCH --account=kempner_kdbrantley_lab
 #SBATCH --output=logs/%x-%A-%a.out
 #SBATCH -t 01:30:00
 #SBATCH --array 3,6,9,12,15,18,21,24,28,32
@@ -15,13 +14,22 @@ conda activate verl
 
 export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 
-# User-specific default paths
+# User-specific defaults. Account is set here (not via #SBATCH) so it tracks
+# $USER without requiring a per-user copy of this script; sbatch parses
+# directives at submission time, so the static --account directive was removed
+# and we verify $SLURM_JOB_ACCOUNT matches below.
 if [ "$USER" = "mwalden" ]; then
     _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints
+    _account=kempner_kdbrantley_lab
 elif [ "$USER" = "sdholakia" ]; then
     _checkpoint_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/rl-checkpoints
+    _account=kempner_bingbin_lab
 else
     echo "ERROR: Unknown user $USER. Set CHECKPOINT_DIR explicitly." >&2
+    exit 1
+fi
+if [ -n "${SLURM_JOB_ACCOUNT:-}" ] && [ "$SLURM_JOB_ACCOUNT" != "$_account" ]; then
+    echo "ERROR: job running on account=$SLURM_JOB_ACCOUNT, expected $_account for user $USER. Resubmit with: sbatch --account=$_account ..." >&2
     exit 1
 fi
 

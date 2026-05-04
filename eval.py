@@ -5,6 +5,7 @@ import os
 import json
 import torch
 from utils import *
+from prompt_utils import render_prompt
 import argparse
 
 def main(args):
@@ -27,8 +28,7 @@ def main(args):
     
     # gemerate r1 prompt with a prefix for the model to already start with the thinking process
     def generate_r1_prompt(example):
-        prompt = example["prompt"]
-        return {"prompt": tokenizer.apply_chat_template(prompt, tokenize=False, continue_final_message=True)}
+        return {"prompt": render_prompt(tokenizer, example["prompt"], mode="eval")}
 
     # convert our dataset to the r1 prompt
     dataset = dataset.map(lambda x: generate_r1_prompt(x))
