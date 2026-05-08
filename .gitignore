@@ -3,7 +3,17 @@ logs/
 verl/
 results/
 figures/
+wandb/
 __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+
+# editor / agent state
+.claude/
+.codex
+
+# screenshots / pasted images dropped in repo root
+/*.png
+/*.jpg
+/*.jpeg

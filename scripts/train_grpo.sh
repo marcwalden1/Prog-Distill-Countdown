@@ -142,6 +142,7 @@ python3 -m verl.trainer.main_ppo \
     reward_model.strategy=fsdp2 \
     actor_rollout_ref.rollout.enforce_eager=False \
     actor_rollout_ref.rollout.free_cache_engine=True \
+    ${EXTRA_ARGS:-} \
     2>&1 | python3 -u ${project_dir}/scripts/timestamp_filter.py
 TRAIN_EXIT_CODE=${PIPESTATUS[0]}
 set +o pipefail

@@ -262,28 +262,9 @@ Each round saves only at its final step (`save_freq=-1` in `train_sft.sh`); if a
     tail -f logs/generate_sft_data.sh-<first-gendata-jid>-*.out      # watch first round's data gen
     ls $CHECKPOINT_DIR/sft-checkpoints/<MODEL_NAME>/<EXP_NAME>/      # round_150 appears ~30-60m after SFT starts
 
-### Required local verl patch (committed on `local-fixes` branch)
+### Required local verl patch
 
-Each round's SFT runs only `PROGDISTILL_STEPS_PER_ROUND` (160) optimizer steps with `trainer.total_epochs=9999` + `trainer.total_training_steps=160`. Stock verl's `_build_model_optimizer` (in `verl/verl/trainer/fsdp_sft_trainer.py`) sizes the LR scheduler off `steps_per_epoch * total_epochs` (~6M steps) and ignores `total_training_steps`, so warmup never finishes and the effective LR collapses to ~`step/total_training_steps × peak`. With the bug present, `SFT_LR` has no observable effect and the student barely trains.
-
-The fix is a 5-line edit in `_build_model_optimizer` to prefer `trainer.total_training_steps` when set (mirrors the pattern already used in `fit()`):
-
-    if self.config.trainer.get("total_training_steps", None) is not None:
-        self.total_steps = int(self.config.trainer.total_training_steps)
-    else:
-        self.total_steps = self.steps_per_epoch * self.config.trainer.total_epochs
-
-This is committed to the verl checkout on the **`local-fixes`** branch (forked from the pinned `083da9a` commit). The parent repo ignores `verl/`, so the patch only lives on this machine — fresh clones must reapply.
-
-To check / restore the patch on this checkout:
-
-    cd verl
-    git branch --show-current   # should print: local-fixes
-    git log --oneline -2         # top commit: "fsdp_sft_trainer: prefer trainer.total_training_steps for LR schedule"
-
-If a `git pull` ever needs to bump the verl pin, do `git rebase main local-fixes` inside `verl/` rather than `git checkout main` (which would lose the patch).
-
-Diagnose at runtime by tailing `logs/train_sft.sh-<jid>-*.out` and looking at `train/lr(1e-3)`: with the patch live it peaks near `SFT_LR * 1000` (e.g. ~0.01 for `SFT_LR=1e-5`, ~1.0 for `SFT_LR=1e-3`) at ~10% of `total_training_steps`, then decays via cosine to ~0. Without the patch it ramps linearly from 0 to ~`SFT_LR * (total_training_steps / 624,375) * 1000` over the whole run and never decays.
+Stock verl's `_build_model_optimizer` (in `verl/verl/trainer/fsdp_sft_trainer.py`) sizes the LR scheduler off `steps_per_epoch * total_epochs`. Each progdistill round runs `total_epochs=9999` + `total_training_steps=160`, so the scheduler horizon balloons to ~6M steps and warmup never finishes — `SFT_LR` has no observable effect and the student barely trains. The 5-line fix to make `_build_model_optimizer` prefer `trainer.total_training_steps` when set is documented under **Local verl + vLLM patches** below; reapply it on any fresh checkout. Diagnose at runtime by tailing `logs/train_sft.sh-<jid>-*.out` and checking `train/lr(1e-3)`: with the patch it peaks near `SFT_LR * 1e3`, otherwise orders of magnitude lower.
 
 ---
 
@@ -346,3 +327,103 @@ Key deps: torch==2.6.0, transformers==4.51.1, vllm==0.8.5.post1, flash-attn==2.7
 - Test set deduplication fix (2025-03): Original test set had duplicate prompts (same puzzle presented multiple times). Fixed in preprocess_balanced.py by deduplicating on (sorted(nums), target). Current test set: ~997 unique puzzles.
 - val_kwargs.n: Was previously 7; corrected to 4 to match rollout.n=4.
 - Buggy runs: Any checkpoints from before the deduplication fix should be discarded.
+- Gemma-3-270m GRPO can OOM in actor/ref log-prob computation even though the model is smaller than Qwen2.5-0.5B. Cause: Gemma's vocab is much larger (262k vs Qwen 152k), so the lm_head logits tensor during `compute_log_prob` is huge. The failed runs `gemma-270m-balanced-grpo-lr1e-6-kl3e-3-seed1` and `gemma-270m-balanced-grpo-lr1e-6-kl1e-2-seed1` died after step 1 trying to allocate ~31 GiB at `modeling_gemma3.py:958`. For Gemma reruns, keep experiment hyperparams fixed and only lower memory microbatch knobs via `EXTRA_ARGS`: `actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=16 actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=16 actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4`. Do not bake these into defaults; Qwen runs should use the normal script defaults unless explicitly overridden.
+
+---
+
+## Local verl + vLLM patches
+
+The `verl/` checkout is **not** tracked by this repo. Several edits live only in the working tree (Marc keeps them on a `local-fixes` branch in his verl checkout; Shlok's checkout has them as uncommitted edits in `main`). Re-apply on any fresh clone — without these, gemma-3-270m training is fully broken and progdistill SFT silently runs at LR ≈ 0.
+
+Verify the patches are present on your tree with:
+
+    cd verl && git diff --stat
+    # expect: fsdp_sft_trainer.py, fsdp_utils.py, rl_dataset.py, sft_dataset.py, fsdp_vllm.py
+    cat $(python -c "import vllm, os; print(os.path.dirname(vllm.__file__))")/model_executor/models/gemma3.py | grep -n 'register_buffer.*normalizer'
+    # expect: persistent=False on the line
+
+### 1. `verl/trainer/fsdp_sft_trainer.py` — SFT scheduler-total fix + seed wiring
+
+Two edits in this file:
+
+**a) LR scheduler horizon.** In `_build_model_optimizer`, prefer `trainer.total_training_steps` over `steps_per_epoch * total_epochs` so the cosine LR schedule actually completes during the configured run (mirrors the pattern in `fit()`):
+
+    if self.config.trainer.get("total_training_steps", None) is not None:
+        self.total_steps = int(self.config.trainer.total_training_steps)
+    else:
+        self.total_steps = self.steps_per_epoch * self.config.trainer.total_epochs
+
+Without this, progdistill SFT runs `total_epochs=9999 + total_training_steps=160` and the scheduler horizon balloons to ~6M steps → effective LR ≈ `2.6e-4 × SFT_LR`. Symptom: `train/lr(1e-3)` in wandb stays orders of magnitude below `SFT_LR * 1000`.
+
+**b) Seed wiring.** Stock verl's SFT trainer ignores any seed config: `DistributedSampler(...)` defaults to `seed=0` and `torch.manual_seed` is never called. The patch reads `data.seed` from config and threads it into both. Required for reproducible SFT runs across `--array=1-N` seed sweeps.
+
+    seed = int(self.config.data.get("seed", 0))
+    torch.manual_seed(seed)
+    self.train_sampler = DistributedSampler(
+        self.train_dataset, shuffle=True, num_replicas=world_size, rank=rank, drop_last=True, seed=seed
+    )
+
+`scripts/train_sft.sh` passes `+data.seed=${SFT_SEED}` and `scripts/run_pipeline.sh` forwards `SFT_SEED` from env (default 1).
+
+### 2. `verl/utils/fsdp_utils.py` — FSDP wrap-policy: skip missing classes instead of raising
+
+`get_fsdp_wrap_policy` raises if any class listed in `_no_split_modules` isn't found on the loaded model. Some HF model classes (e.g. `Gemma3ForCausalLM`) declare vision-tower modules in `_no_split_modules` that don't exist on the text-only variant — so the wrap-policy raises before training starts. Match HF Trainer's behavior and skip missing classes; only raise if **none** of them are found:
+
+    transformer_cls_to_wrap = set()
+    for layer_class in fsdp_transformer_layer_cls_to_wrap:
+        transformer_cls = get_module_class_from_name(module, layer_class)
+        if transformer_cls is not None:
+            transformer_cls_to_wrap.add(transformer_cls)
+    if not transformer_cls_to_wrap:
+        raise Exception("Could not find the transformer layer class to wrap in the model.")
+
+### 3. `verl/utils/dataset/rl_dataset.py` + `verl/utils/dataset/sft_dataset.py` — chat_template fallback
+
+Both datasets call `tokenizer.apply_chat_template(...)` unconditionally. Gemma-3-270m's tokenizer has no `chat_template`, so this raises `ValueError: Cannot use apply_chat_template()...`. The repo's parquet files are already in `template_type='base'` format (the prompt is the literal string the model sees), so when no chat template exists, fall through to plain concatenation:
+
+    if getattr(tokenizer, "chat_template", None):
+        raw_prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+    else:
+        # Base models (e.g. gemma-3-270m): parquet content is already final.
+        raw_prompt = "".join(m["content"] for m in messages)
+
+Three call sites: `rl_dataset.py:doc2len`, `rl_dataset.py:__getitem__` (raw_prompt assembly), and `sft_dataset.py:__getitem__`.
+
+### 4. `verl/workers/sharding_manager/fsdp_vllm.py` — gemma3 normalizer-buffer restore
+
+The most subtle and costly bug to diagnose. **Symptom:** every gemma-3-270m GRPO run produces multilingual token salad in vLLM rollout (`val_reward = 0.0` from step 0, response length pinned to the 1024 cap). The same checkpoint generates correctly via `eval.py` (standalone vLLM with `load_format=auto`) and via HF `generate(...)`.
+
+**Root cause.** verl's GRPO default is `actor_rollout_ref.rollout.load_format=dummy_dtensor` (set in `verl/trainer/config/ppo_trainer.yaml`). vLLM's `DummyModelLoader.load_model` calls `initialize_dummy_weights(model)`, which iterates `model.state_dict()` and overwrites floating-point tensors with random values in `[-1e-3, 1e-3]`. **Persistent buffers are included in `state_dict`.** vLLM 0.8.5's `gemma3.py` registers `normalizer = sqrt(hidden_size) ≈ 25.25` as a persistent buffer (no `persistent=False`), so it gets clobbered to a random ~0 value. verl's subsequent `update_params → model.load_weights(...)` only writes parameters, never buffers, so `normalizer ≈ 0` permanently. Forward pass: `embed_tokens(x) * normalizer ≈ 0` → uniform-random logits → token salad.
+
+Qwen2.5 has no equivalent buffer in its vLLM model class, so it's unaffected — every Qwen GRPO works, every gemma GRPO breaks.
+
+**Fix (verl side).** In `update_params`, after `model.load_weights(...)`, walk the model and restore any 1-element `normalizer` tensor to `sqrt(module.config.hidden_size)`:
+
+    if not self.base_sync_done:
+        import torch as _torch
+        for _mod in model.modules():
+            _norm = getattr(_mod, "normalizer", None)
+            if isinstance(_norm, _torch.Tensor) and _norm.numel() == 1:
+                _cfg = getattr(_mod, "config", None)
+                if _cfg is not None and hasattr(_cfg, "hidden_size"):
+                    _norm.data.fill_(float(_cfg.hidden_size) ** 0.5)
+
+**Fix (vLLM side, canonical).** Open `~/.conda/envs/verl/lib/python3.10/site-packages/vllm/model_executor/models/gemma3.py` and find `register_buffer("normalizer", torch.tensor(normalizer))` near line 372. Add `persistent=False`:
+
+    self.register_buffer("normalizer", torch.tensor(normalizer), persistent=False)
+
+Both patches are kept — the vLLM edit is the canonical fix; the verl edit is defense-in-depth in case the conda env is reinstalled and the vLLM patch is lost.
+
+**Verify:** run `repro_v2.py` on an H100 (`sbatch run_repro.sh`). Both `RUN A` (load_format=auto) and `RUN B` (load_format=dummy + push HF state_dict) must report `model.normalizer  shape=()  mean=+2.5250e+01` and produce a coherent `<answer>` for the test prompt. Pre-fix, RUN B shows mean ~`-7.4e-04` and outputs token salad.
+
+### Re-applying patches on a fresh checkout
+
+| Patch | File | Purpose |
+|---|---|---|
+| 1a | `verl/verl/trainer/fsdp_sft_trainer.py` (`_build_model_optimizer`) | SFT LR scheduler horizon |
+| 1b | `verl/verl/trainer/fsdp_sft_trainer.py` (sampler init) | SFT seed wiring |
+| 2 | `verl/verl/utils/fsdp_utils.py` (`get_fsdp_wrap_policy`) | FSDP wrap-policy: skip missing classes |
+| 3a | `verl/verl/utils/dataset/rl_dataset.py` | chat_template fallback (RL dataset, 2 sites) |
+| 3b | `verl/verl/utils/dataset/sft_dataset.py` | chat_template fallback (SFT dataset) |
+| 4 verl | `verl/verl/workers/sharding_manager/fsdp_vllm.py` (`update_params`) | gemma3 normalizer buffer restore |
+| 4 vLLM | `<conda env>/lib/python3.10/site-packages/vllm/model_executor/models/gemma3.py` line ~372 | `persistent=False` on normalizer buffer |

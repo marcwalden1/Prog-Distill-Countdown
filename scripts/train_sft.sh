@@ -48,6 +48,7 @@ sft_base_model_path=${SFT_BASE_MODEL_PATH:-${MODEL_DIR:-$_model_dir}/${model_nam
 sft_output_dir=${SFT_OUTPUT_DIR:?SFT_OUTPUT_DIR must be set}
 sft_train_steps=${SFT_TRAIN_STEPS:-1600}
 sft_lr=${SFT_LR:-1e-5}
+sft_seed=${SFT_SEED:-1}
 sft_experiment_label=${SFT_EXPERIMENT_LABEL:-sft}
 
 N_GPUS="$(( $(echo $SLURM_JOB_GPUS| grep -o , | wc -l) + 1 ))"
@@ -70,6 +71,7 @@ echo "Base model:        ${sft_base_model_path}"
 echo "Output dir:        ${sft_output_dir}"
 echo "Train steps:       ${sft_train_steps}"
 echo "Learning rate:     ${sft_lr}"
+echo "Seed:              ${sft_seed}"
 echo "============================================================"
 
 cd ${project_dir}/verl
@@ -88,6 +90,7 @@ python3 -m torch.distributed.run \
     data.truncation=right \
     data.train_batch_size=64 \
     data.micro_batch_size_per_gpu=4 \
+    +data.seed=${sft_seed} \
     model.partial_pretrain=${sft_base_model_path} \
     model.enable_gradient_checkpointing=True \
     model.strategy=fsdp2 \
