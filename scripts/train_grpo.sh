@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:4 # for 7B, use 8 GPUs
+#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:2 # for larger models, override with TRAIN_SBATCH_ARGS
 #SBATCH -N 1 -n 1
 #SBATCH --mem-per-gpu=96G
 #SBATCH --cpus-per-gpu 8
