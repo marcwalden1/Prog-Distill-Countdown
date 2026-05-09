@@ -19,7 +19,7 @@ export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 # directives at submission time, so the static --account directive was removed
 # and we verify $SLURM_JOB_ACCOUNT matches below.
 if [ "$USER" = "mwalden" ]; then
-    _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints
+    _checkpoint_dir=/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-checkpoints
     _account=kempner_kdbrantley_lab
 elif [ "$USER" = "sdholakia" ]; then
     _checkpoint_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/rl-checkpoints

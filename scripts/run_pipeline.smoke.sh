@@ -90,7 +90,7 @@ PROGDISTILL_STEPS_PER_ROUND=${PROGDISTILL_STEPS_PER_ROUND:-160}
 
 # User-specific checkpoint dir (mirrors logic in train_grpo.sh / eval.sh)
 if [ "$USER" = "mwalden" ]; then
-    _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints
+    _checkpoint_dir=/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-checkpoints
     _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models
     _account=kempner_kdbrantley_lab
     _train_partition=kempner_h100

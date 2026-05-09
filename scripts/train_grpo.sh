@@ -29,7 +29,7 @@ export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 # User-specific default paths
 if [ "$USER" = "mwalden" ]; then
     _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models
-    _checkpoint_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints
+    _checkpoint_dir=/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-checkpoints
 elif [ "$USER" = "sdholakia" ]; then
     _model_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/models
     _checkpoint_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/rl-checkpoints

@@ -11,7 +11,7 @@ export PYTHONPATH=/n/home06/mwalden/.local/lib/python3.10/site-packages:${PYTHON
 
 project_dir=${PROJECT_DIR:-$PWD}
 result_dir=${RESULT_DIR:-${project_dir}}
-checkpoint_dir=${CHECKPOINT_DIR:-/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/rl-checkpoints}
+checkpoint_dir=${CHECKPOINT_DIR:-/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-checkpoints}
 
 model_name=${MODEL_NAME:-Qwen2.5-1.5B}
 exp_name=${EXP_NAME:-balanced-grpo-seed1}
