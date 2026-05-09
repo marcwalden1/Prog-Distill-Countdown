@@ -27,10 +27,15 @@ export WANDB_ENTITY="progressive_distill"
 
 # Tag this wandb run so the post-distill GRPO leg is filterable alongside its SFT rounds.
 # DISTILL_MODE is set by run_pipeline.sh when this is the final GRPO stage of a (prog)distill chain.
+# Also tag by student model size (e.g. "270m", "0.5B", "1.5B") — derived from the trailing
+# segment of MODEL_NAME after the last hyphen. MODEL_NAME is the student in both standalone
+# GRPO and the post-distill GRPO leg, so this tag always reflects the model being trained.
 _grpo_tags="grpo"
 if [ -n "${DISTILL_MODE:-}" ]; then
     _grpo_tags="${DISTILL_MODE},grpo"
 fi
+_size_tag="${MODEL_NAME##*-}"
+_grpo_tags="${_grpo_tags},${_size_tag}"
 export WANDB_TAGS="${WANDB_TAGS:-${_grpo_tags}}"
 export RAY_DISABLE_DASHBOARD=1
 export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}

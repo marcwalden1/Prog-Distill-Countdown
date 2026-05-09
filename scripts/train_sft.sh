@@ -18,10 +18,14 @@ export WANDB_ENTITY="progressive_distill"
 
 # Tag this wandb run by pipeline mode so progdistill/distill SFT runs are filterable.
 # DISTILL_MODE is set by run_pipeline.sh; falls back to "sft" when SFT is run standalone.
+# Also tag by student model size (e.g. "270m", "0.5B", "1.5B") — derived from the trailing
+# segment of MODEL_NAME after the last hyphen. MODEL_NAME is the student being SFT'd.
 _sft_tags="sft"
 if [ -n "${DISTILL_MODE:-}" ]; then
     _sft_tags="${DISTILL_MODE},sft"
 fi
+_size_tag="${MODEL_NAME##*-}"
+_sft_tags="${_sft_tags},${_size_tag}"
 export WANDB_TAGS="${WANDB_TAGS:-${_sft_tags}}"
 
 # User-specific default paths

@@ -422,7 +422,7 @@ def log_to_wandb(model_name, exp_name, val_curve, metrics_by_dataset, lengths_by
         else:
             condition = "rl-only"
 
-    tags = ["eval", condition]
+    tags = ["eval", condition, "grpo", model_name.split("-")[-1]]
 
     run = wandb.init(
         project="prog_distill",
