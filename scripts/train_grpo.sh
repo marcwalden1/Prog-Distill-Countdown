@@ -97,7 +97,26 @@ ulimit -n 65536
 ray stop 2>/dev/null || true
 rm -rf /tmp/ray/ 2>/dev/null || true
 export RAY_TMPDIR=/tmp/ray_${SLURM_JOB_ID}
-ray start --head --include-dashboard=false --num-gpus=${N_GPUS} --temp-dir=/tmp/ray_${SLURM_JOB_ID}
+
+# Per-job Ray port range. Ray's --temp-dir isolates the filesystem session
+# pointer, but the GCS server still binds the default port 6379. On shared
+# partitions (MIT mit_preemptable), two SLURM jobs can land on the same
+# compute node and race for that port — the loser sees "Session name ...
+# does not match persisted value" from _write_cluster_info_to_kv, then
+# python's ray.init() falls back to a local instance that can't talk to
+# the stale raylet socket. Deriving the port from SLURM_JOB_ID avoids
+# the collision entirely. Setting RAY_ADDRESS pins ray.init() to our head.
+RAY_PORT=$((20000 + (SLURM_JOB_ID % 40000)))
+export RAY_ADDRESS=127.0.0.1:${RAY_PORT}
+ray start --head \
+    --include-dashboard=false \
+    --num-gpus=${N_GPUS} \
+    --temp-dir=/tmp/ray_${SLURM_JOB_ID} \
+    --port=${RAY_PORT} \
+    --node-manager-port=$((RAY_PORT + 1)) \
+    --object-manager-port=$((RAY_PORT + 2)) \
+    --min-worker-port=$((RAY_PORT + 100)) \
+    --max-worker-port=$((RAY_PORT + 1100))
 
 set -o pipefail
 python3 -m verl.trainer.main_ppo \
