@@ -48,9 +48,10 @@ fi
 pushd "${REPO_ROOT}/verl" >/dev/null
 
 current_commit=$(git rev-parse HEAD)
-if ! git merge-base --is-ancestor "${VERL_PIN}" HEAD 2>/dev/null; then
-    echo "verl: pin commit ${VERL_PIN:0:8} not reachable from HEAD (currently ${current_commit:0:8})."
-    echo "verl: fetching and checking out the pin."
+if [ "${current_commit}" != "${VERL_PIN}" ]; then
+    echo "verl: HEAD is ${current_commit:0:8}, checking out pin ${VERL_PIN:0:8}."
+    echo "      (the patch is generated against the exact pin tree, not just"
+    echo "      pin-as-ancestor — context lines drift on newer main.)"
     git fetch --quiet origin "${VERL_PIN}" 2>/dev/null || git fetch --quiet origin
     git checkout --quiet "${VERL_PIN}"
 fi
