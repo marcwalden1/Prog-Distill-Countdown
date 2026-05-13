@@ -34,8 +34,10 @@
 # Optional env var overrides:
 #   KL_COEF                    — KL loss coefficient (default: 0.001)
 #   DATA_SOURCE                — data directory under data/ (default: balanced)
-#   EXTRA_ARGS                 — extra args forwarded to eval.py
+#   EXTRA_ARGS                 — Hydra-style overrides forwarded to train_grpo.sh / train_ppo.sh
+#   EVAL_EXTRA_ARGS            — extra argparse args forwarded to eval.py
 #   TRAIN_SBATCH_ARGS          — extra sbatch args for train_grpo.sh
+#   EVAL_SBATCH_ARGS           — extra sbatch args for eval.sh (e.g. --gres override on a non-FAS-RC cluster)
 #   SFT_SBATCH_ARGS            — extra sbatch args for train_sft.sh / generate_sft_data.sh
 #   PROGDISTILL_STEPS_PER_ROUND — SFT steps per teacher checkpoint round (default: 50)
 #   SFT_TRAIN_STEPS            — total SFT steps for --distill mode (default: 1600, matches progdistill budget)
@@ -96,6 +98,7 @@ SFT_DATA_SOURCE_EXP_NAME=${SFT_DATA_SOURCE_EXP_NAME:-""}
 
 TRAIN_SBATCH_ARGS=${TRAIN_SBATCH_ARGS:-""}
 SFT_SBATCH_ARGS=${SFT_SBATCH_ARGS:-""}
+EVAL_SBATCH_ARGS=${EVAL_SBATCH_ARGS:-""}
 PROGDISTILL_STEPS_PER_ROUND=${PROGDISTILL_STEPS_PER_ROUND:-160}
 
 # User-specific checkpoint dir (mirrors logic in train_grpo.sh / eval.sh)
@@ -117,6 +120,20 @@ elif [ "$USER" = "sdholakia" ]; then
     _plot_extra="--gres=gpu:nvidia_h100_80gb_hbm3:1"
     _plot_partition=kempner_requeue
     _plot_account=kempner_bingbin_lab
+elif [ "${CLUSTER:-}" = "mit" ]; then
+    # MIT cluster (CLUSTER=mit). mit_normal_gpu has a 6h wall-clock cap which
+    # is too short for gemma GRPO (~22h on Harvard 4xH100), so train+plot
+    # default to mit_preemptable. Eval is short (~30min/task) and fits in
+    # mit_normal_gpu. Override the account / partitions via env vars if your
+    # MIT account differs from "mit_general" or you prefer different queues.
+    _checkpoint_dir=${HOME}/rl-checkpoints
+    _model_dir=${HOME}/models
+    _account=${MIT_ACCOUNT:-mit_general}
+    _train_partition=${MIT_TRAIN_PARTITION:-mit_preemptable}
+    _eval_partition=${MIT_EVAL_PARTITION:-mit_normal_gpu}
+    _plot_extra=""
+    _plot_partition=${MIT_PLOT_PARTITION:-mit_preemptable}
+    _plot_account=${MIT_PLOT_ACCOUNT:-${_account}}
 else
     echo "ERROR: Unknown user $USER. Set CHECKPOINT_DIR and MODEL_DIR explicitly." >&2
     exit 1
@@ -425,6 +442,7 @@ if [ -n "${FINAL_JID:-}" ]; then
                 --partition=$_eval_partition --account=$_account \
                 --array=1-1 \
                 --dependency=afterok:${FINAL_JID} \
+                ${EVAL_SBATCH_ARGS} \
                 scripts/eval.sh)
         EVAL_JID2=$(EVAL_DATASET=balanced5 \
             EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
@@ -433,6 +451,7 @@ if [ -n "${FINAL_JID:-}" ]; then
                 --partition=$_eval_partition --account=$_account \
                 --array=1-1 \
                 --dependency=afterok:${FINAL_JID} \
+                ${EVAL_SBATCH_ARGS} \
                 scripts/eval.sh)
         EVAL_JID3=$(EVAL_DATASET=balanced6 \
             EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
@@ -441,19 +460,23 @@ if [ -n "${FINAL_JID:-}" ]; then
                 --partition=$_eval_partition --account=$_account \
                 --array=1-1 \
                 --dependency=afterok:${FINAL_JID} \
+                ${EVAL_SBATCH_ARGS} \
                 scripts/eval.sh)
     else
         EVAL_JID1=$(EVAL_DATASET=balanced  sbatch --parsable \
             --partition=$_eval_partition --account=$_account \
             --dependency=afterok:${FINAL_JID} \
+            ${EVAL_SBATCH_ARGS} \
             scripts/eval.sh)
         EVAL_JID2=$(EVAL_DATASET=balanced5 sbatch --parsable \
             --partition=$_eval_partition --account=$_account \
             --dependency=afterok:${FINAL_JID} \
+            ${EVAL_SBATCH_ARGS} \
             scripts/eval.sh)
         EVAL_JID3=$(EVAL_DATASET=balanced6 sbatch --parsable \
             --partition=$_eval_partition --account=$_account \
             --dependency=afterok:${FINAL_JID} \
+            ${EVAL_SBATCH_ARGS} \
             scripts/eval.sh)
     fi
     echo "Eval:   job $EVAL_JID1 (n=3,4)  $EVAL_JID2 (n=5)  $EVAL_JID3 (n=6)"

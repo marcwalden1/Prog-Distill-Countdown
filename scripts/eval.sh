@@ -8,9 +8,15 @@
 #SBATCH -t 01:30:00
 #SBATCH --array 3,6,9,12,15,18,21,24,28,32
 
-module load Miniforge3/26.1.0-fasrc01
-source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
-conda activate verl
+if [ "${CLUSTER:-}" = "mit" ]; then
+    # MIT cluster: see scripts/train_grpo.sh for notes.
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate "${MIT_CONDA_ENV:-base}"
+else
+    module load Miniforge3/26.1.0-fasrc01
+    source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
+    conda activate verl
+fi
 
 export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 
@@ -24,11 +30,17 @@ if [ "$USER" = "mwalden" ]; then
 elif [ "$USER" = "sdholakia" ]; then
     _checkpoint_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/rl-checkpoints
     _account=kempner_bingbin_lab
+elif [ "${CLUSTER:-}" = "mit" ]; then
+    # MIT cluster (CLUSTER=mit). CHECKPOINT_DIR override expected; account
+    # left empty so the strict match check below is skipped (MIT account is
+    # passed via the sbatch CLI / SBATCH_ACCOUNT, not pinned here).
+    _checkpoint_dir=${HOME}/rl-checkpoints
+    _account=""
 else
     echo "ERROR: Unknown user $USER. Set CHECKPOINT_DIR explicitly." >&2
     exit 1
 fi
-if [ -n "${SLURM_JOB_ACCOUNT:-}" ] && [ "$SLURM_JOB_ACCOUNT" != "$_account" ]; then
+if [ -n "$_account" ] && [ -n "${SLURM_JOB_ACCOUNT:-}" ] && [ "$SLURM_JOB_ACCOUNT" != "$_account" ]; then
     echo "ERROR: job running on account=$SLURM_JOB_ACCOUNT, expected $_account for user $USER. Resubmit with: sbatch --account=$_account ..." >&2
     exit 1
 fi
@@ -40,7 +52,7 @@ result_dir=${RESULT_DIR:-${project_dir}}
 model_name=${MODEL_NAME:-Qwen2.5-1.5B}
 exp_name=${EXP_NAME:-balanced-grpo-seed1}
 eval_dataset=${EVAL_DATASET:-balanced}
-extra_args=${EXTRA_ARGS:-""}
+extra_args=${EVAL_EXTRA_ARGS:-""}
 
 if [ -n "${EVAL_CHECKPOINT_PATH:-}" ]; then
     # SFT-only mode: eval a specific checkpoint (no array-index derivation).

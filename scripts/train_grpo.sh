@@ -9,9 +9,18 @@
 #SBATCH --partition=kempner_h100
 #SBATCH --account=kempner_kdbrantley_lab
 
-module load Miniforge3/26.1.0-fasrc01
-source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
-conda activate verl
+if [ "${CLUSTER:-}" = "mit" ]; then
+    # MIT cluster: no FAS-RC module system. Conda must already be on PATH
+    # from the submitter's shell (~/.bashrc). MIT_CONDA_ENV overrides the
+    # default env name ("base"). Opt-in via CLUSTER=mit; default unset =
+    # Harvard.
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate "${MIT_CONDA_ENV:-base}"
+else
+    module load Miniforge3/26.1.0-fasrc01
+    source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
+    conda activate verl
+fi
 
 export WANDB_MODE="online"
 export WANDB_ENTITY="progressive_distill"
@@ -33,6 +42,11 @@ if [ "$USER" = "mwalden" ]; then
 elif [ "$USER" = "sdholakia" ]; then
     _model_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/models
     _checkpoint_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/rl-checkpoints
+elif [ "${CLUSTER:-}" = "mit" ]; then
+    # MIT cluster (CLUSTER=mit). Defaults live under $HOME; override with
+    # MODEL_DIR / CHECKPOINT_DIR env vars (or MODEL_PATH for one-off paths).
+    _model_dir=${HOME}/models
+    _checkpoint_dir=${HOME}/rl-checkpoints
 else
     echo "ERROR: Unknown user $USER. Set MODEL_DIR and CHECKPOINT_DIR explicitly." >&2
     exit 1

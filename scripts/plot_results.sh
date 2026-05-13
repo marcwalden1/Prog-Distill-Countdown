@@ -6,9 +6,15 @@
 #SBATCH --output=logs/%x-%A.out
 #SBATCH -t 01:00:00
 
-module load Miniforge3/26.1.0-fasrc01
-source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
-conda activate verl
+if [ "${CLUSTER:-}" = "mit" ]; then
+    # MIT cluster: see scripts/train_grpo.sh for notes.
+    source "$(conda info --base)/etc/profile.d/conda.sh"
+    conda activate "${MIT_CONDA_ENV:-base}"
+else
+    module load Miniforge3/26.1.0-fasrc01
+    source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
+    conda activate verl
+fi
 
 export WANDB_MODE="online"
 export WANDB_ENTITY="progressive_distill"
@@ -19,6 +25,8 @@ if [ "$USER" = "mwalden" ]; then
     _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models
 elif [ "$USER" = "sdholakia" ]; then
     _model_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/models
+elif [ "${CLUSTER:-}" = "mit" ]; then
+    _model_dir=${HOME}/models
 else
     echo "ERROR: Unknown user $USER. Set MODEL_DIR explicitly." >&2
     exit 1
