@@ -106,17 +106,27 @@ export RAY_TMPDIR=/tmp/ray_${SLURM_JOB_ID}
 # python's ray.init() falls back to a local instance that can't talk to
 # the stale raylet socket. Deriving the port from SLURM_JOB_ID avoids
 # the collision entirely. Setting RAY_ADDRESS pins ray.init() to our head.
-RAY_PORT=$((20000 + (SLURM_JOB_ID % 40000)))
+# Per-job port plan. Cover EVERY component Ray pre-allocates — the
+# default dashboard_agent_http=52365, runtime_env_agent=48457, etc.
+# are fixed and will collide with our worker range otherwise, and
+# also collide cross-job when two SLURM jobs land on the same node.
+# Worker range kept tight (90 ports) to fit inside the per-job slot.
+RAY_PORT=$((20000 + (SLURM_JOB_ID % 300) * 100))
 export RAY_ADDRESS=127.0.0.1:${RAY_PORT}
 ray start --head \
     --include-dashboard=false \
     --num-gpus=${N_GPUS} \
     --temp-dir=/tmp/ray_${SLURM_JOB_ID} \
+    --node-ip-address=127.0.0.1 \
     --port=${RAY_PORT} \
     --node-manager-port=$((RAY_PORT + 1)) \
     --object-manager-port=$((RAY_PORT + 2)) \
-    --min-worker-port=$((RAY_PORT + 100)) \
-    --max-worker-port=$((RAY_PORT + 1100))
+    --dashboard-agent-listen-port=$((RAY_PORT + 3)) \
+    --dashboard-agent-grpc-port=$((RAY_PORT + 4)) \
+    --runtime-env-agent-port=$((RAY_PORT + 5)) \
+    --metrics-export-port=$((RAY_PORT + 6)) \
+    --min-worker-port=$((RAY_PORT + 10)) \
+    --max-worker-port=$((RAY_PORT + 99))
 
 set -o pipefail
 python3 -m verl.trainer.main_ppo \
