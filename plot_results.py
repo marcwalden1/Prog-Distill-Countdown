@@ -408,21 +408,39 @@ def main():
 # WandB logging
 # ---------------------------------------------------------------------------
 
+def wandb_tags_for_run(model_name, exp_name, condition=None, stage="eval"):
+    tags = [stage]
+
+    inferred_condition = condition
+    if inferred_condition is None:
+        if "progdistill" in exp_name:
+            inferred_condition = "progdistill"
+        elif "distill" in exp_name:
+            inferred_condition = "distill"
+        else:
+            inferred_condition = "rl-only"
+
+    tags.append(inferred_condition)
+    if "grpo" in exp_name:
+        tags.append("grpo")
+    elif stage == "eval":
+        tags.append("sft")
+    tags.append(model_name.split("-")[-1])
+
+    for tag in os.environ.get("WANDB_TAGS", "").split(","):
+        tag = tag.strip()
+        if tag:
+            tags.append(tag)
+
+    return list(dict.fromkeys(tags)), inferred_condition
+
+
 def log_to_wandb(model_name, exp_name, val_curve, metrics_by_dataset, lengths_by_dataset,
                  condition=None):
     # Deterministic run ID so re-running plot_results resumes the same eval run
     run_id = hashlib.md5(f"{model_name}-{exp_name}-eval".encode()).hexdigest()[:8]
 
-    # Infer condition from exp_name if not provided
-    if condition is None:
-        if "progdistill" in exp_name:
-            condition = "progdistill"
-        elif "distill" in exp_name:
-            condition = "distill"
-        else:
-            condition = "rl-only"
-
-    tags = ["eval", condition, "grpo", model_name.split("-")[-1]]
+    tags, condition = wandb_tags_for_run(model_name, exp_name, condition, stage="eval")
 
     run = wandb.init(
         project="prog_distill",

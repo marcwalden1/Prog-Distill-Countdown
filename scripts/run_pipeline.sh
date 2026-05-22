@@ -435,7 +435,7 @@ if [ -n "${FINAL_JID:-}" ]; then
         # SFT-only: eval the single final SFT checkpoint per dataset.
         project_dir=${PROJECT_DIR:-$PWD}
         eval_result_base=${project_dir}/results/${MODEL_NAME}/${EXP_NAME}/${FINAL_EVAL_SUBDIR}
-        EVAL_JID1=$(EVAL_DATASET=balanced \
+        EVAL_JID1=$(EXTRA_ARGS="${EVAL_EXTRA_ARGS:-}" EVAL_DATASET=balanced \
             EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
             EVAL_RESULT_PATH="${eval_result_base}" \
             sbatch --parsable \
@@ -444,7 +444,7 @@ if [ -n "${FINAL_JID:-}" ]; then
                 --dependency=afterok:${FINAL_JID} \
                 ${EVAL_SBATCH_ARGS} \
                 scripts/eval.sh)
-        EVAL_JID2=$(EVAL_DATASET=balanced5 \
+        EVAL_JID2=$(EXTRA_ARGS="${EVAL_EXTRA_ARGS:-}" EVAL_DATASET=balanced5 \
             EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
             EVAL_RESULT_PATH="${eval_result_base}" \
             sbatch --parsable \
@@ -453,7 +453,7 @@ if [ -n "${FINAL_JID:-}" ]; then
                 --dependency=afterok:${FINAL_JID} \
                 ${EVAL_SBATCH_ARGS} \
                 scripts/eval.sh)
-        EVAL_JID3=$(EVAL_DATASET=balanced6 \
+        EVAL_JID3=$(EXTRA_ARGS="${EVAL_EXTRA_ARGS:-}" EVAL_DATASET=balanced6 \
             EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
             EVAL_RESULT_PATH="${eval_result_base}" \
             sbatch --parsable \
@@ -463,17 +463,17 @@ if [ -n "${FINAL_JID:-}" ]; then
                 ${EVAL_SBATCH_ARGS} \
                 scripts/eval.sh)
     else
-        EVAL_JID1=$(EVAL_DATASET=balanced  sbatch --parsable \
+        EVAL_JID1=$(EXTRA_ARGS="${EVAL_EXTRA_ARGS:-}" EVAL_DATASET=balanced  sbatch --parsable \
             --partition=$_eval_partition --account=$_account \
             --dependency=afterok:${FINAL_JID} \
             ${EVAL_SBATCH_ARGS} \
             scripts/eval.sh)
-        EVAL_JID2=$(EVAL_DATASET=balanced5 sbatch --parsable \
+        EVAL_JID2=$(EXTRA_ARGS="${EVAL_EXTRA_ARGS:-}" EVAL_DATASET=balanced5 sbatch --parsable \
             --partition=$_eval_partition --account=$_account \
             --dependency=afterok:${FINAL_JID} \
             ${EVAL_SBATCH_ARGS} \
             scripts/eval.sh)
-        EVAL_JID3=$(EVAL_DATASET=balanced6 sbatch --parsable \
+        EVAL_JID3=$(EXTRA_ARGS="${EVAL_EXTRA_ARGS:-}" EVAL_DATASET=balanced6 sbatch --parsable \
             --partition=$_eval_partition --account=$_account \
             --dependency=afterok:${FINAL_JID} \
             ${EVAL_SBATCH_ARGS} \
