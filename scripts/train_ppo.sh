@@ -9,7 +9,13 @@
 
 conda activate verl
 
-export WANDB_MODE="offline"
+export WANDB_MODE="${WANDB_MODE:-online}"
+# Put wandb-core's IPC port-file on local /tmp — NFS-backed paths bust the
+# 30s service-startup timeout (ServicePollForTokenError). Matches train_grpo.sh.
+export WANDB_DIR="/tmp/wandb_${SLURM_JOB_ID:-$$}"
+mkdir -p "${WANDB_DIR}"
+export WANDB__SERVICE_WAIT="${WANDB__SERVICE_WAIT:-120}"
+export RAY_raylet_start_wait_time_s="${RAY_raylet_start_wait_time_s:-60}"
 
 project_dir=${PROJECT_DIR:-$PWD}
 cd ${project_dir}/verl

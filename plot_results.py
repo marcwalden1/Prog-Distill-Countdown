@@ -410,8 +410,11 @@ def main():
 
 def log_to_wandb(model_name, exp_name, val_curve, metrics_by_dataset, lengths_by_dataset,
                  condition=None):
-    # Deterministic run ID so re-running plot_results resumes the same eval run
-    run_id = hashlib.md5(f"{model_name}-{exp_name}-eval".encode()).hexdigest()[:8]
+    # Namespace by user so two people running the same exp_name don't collide
+    # on the same deterministic run id (which silently resumes the other user's
+    # run and rejects every log as "step less than current").
+    user = os.environ.get("USER", "unknown")
+    run_id = hashlib.md5(f"{user}-{model_name}-{exp_name}-eval".encode()).hexdigest()[:8]
 
     # Infer condition from exp_name if not provided
     if condition is None:
@@ -422,17 +425,41 @@ def log_to_wandb(model_name, exp_name, val_curve, metrics_by_dataset, lengths_by
         else:
             condition = "rl-only"
 
-    tags = ["eval", condition]
+    tags = ["eval", condition, f"user:{user}"]
 
-    run = wandb.init(
+    # Pass x_service_wait directly via Settings — relying on WANDB__SERVICE_WAIT
+    # env var has been unreliable on FAS-RC compute nodes (job 13718245 still
+    # timed out at 30s despite the env var being exported).
+    init_kwargs = dict(
         project="prog_distill",
         entity="progressive_distill",
         name=f"{model_name}-{exp_name}-eval",
         id=run_id,
         resume="allow",
         tags=tags,
-        config={"model_name": model_name, "exp_name": exp_name, "condition": condition},
+        config={"model_name": model_name, "exp_name": exp_name,
+                "condition": condition, "user": user},
+        settings=wandb.Settings(x_service_wait=180.0),
     )
+    try:
+        run = wandb.init(**init_kwargs)
+    except Exception as e:
+        # wandb-core service can fail to start on flaky nodes. Don't bring
+        # down the plot job over it — fall back to offline and continue.
+        print(f"  WandB online init failed ({e}); retrying offline...", flush=True)
+        try:
+            wandb.teardown()
+        except Exception:
+            pass
+        init_kwargs["settings"] = wandb.Settings(
+            x_service_wait=180.0, mode="offline"
+        )
+        try:
+            run = wandb.init(**init_kwargs)
+        except Exception as e2:
+            print(f"  WandB offline init also failed ({e2}); skipping wandb logging.",
+                  flush=True)
+            return
 
     # Build per-step dicts for val reward and eval metrics
     val_dict = dict(val_curve) if val_curve else {}

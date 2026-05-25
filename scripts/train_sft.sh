@@ -13,8 +13,13 @@ source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
 conda activate verl
 
 export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
-export WANDB_MODE="online"
+export WANDB_MODE="${WANDB_MODE:-online}"
 export WANDB_ENTITY="progressive_distill"
+# Put wandb-core's IPC port-file on local /tmp — NFS-backed paths bust the
+# 30s service-startup timeout (ServicePollForTokenError). Matches train_grpo.sh.
+export WANDB_DIR="/tmp/wandb_${SLURM_JOB_ID:-$$}"
+mkdir -p "${WANDB_DIR}"
+export WANDB__SERVICE_WAIT="${WANDB__SERVICE_WAIT:-120}"
 
 # Tag this wandb run by pipeline mode so progdistill/distill SFT runs are filterable.
 # DISTILL_MODE is set by run_pipeline.sh; falls back to "sft" when SFT is run standalone.

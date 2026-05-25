@@ -26,7 +26,10 @@ export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 # and we verify $SLURM_JOB_ACCOUNT matches below.
 if [ "$USER" = "mwalden" ]; then
     _checkpoint_dir=/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-checkpoints
+    # Allow either the Kempner account (default for kempner_* partitions) or
+    # the lab account (needed for gpu_requeue, which DenyAccounts kempner_*).
     _account=kempner_kdbrantley_lab
+    _account_alt=kdbrantley_lab
 elif [ "$USER" = "sdholakia" ]; then
     _checkpoint_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/rl-checkpoints
     _account=kempner_bingbin_lab
@@ -40,8 +43,10 @@ else
     echo "ERROR: Unknown user $USER. Set CHECKPOINT_DIR explicitly." >&2
     exit 1
 fi
-if [ -n "$_account" ] && [ -n "${SLURM_JOB_ACCOUNT:-}" ] && [ "$SLURM_JOB_ACCOUNT" != "$_account" ]; then
-    echo "ERROR: job running on account=$SLURM_JOB_ACCOUNT, expected $_account for user $USER. Resubmit with: sbatch --account=$_account ..." >&2
+if [ -n "$_account" ] && [ -n "${SLURM_JOB_ACCOUNT:-}" ] \
+        && [ "$SLURM_JOB_ACCOUNT" != "$_account" ] \
+        && [ "$SLURM_JOB_ACCOUNT" != "${_account_alt:-}" ]; then
+    echo "ERROR: job running on account=$SLURM_JOB_ACCOUNT, expected $_account${_account_alt:+ or $_account_alt} for user $USER." >&2
     exit 1
 fi
 

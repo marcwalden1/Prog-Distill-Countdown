@@ -29,7 +29,7 @@ Research code for the paper **"How Does RL Post-training Induce Skill Compositio
 | Test data (n=6) | data/balanced6/test.parquet |
 | Raw puzzles | data/countdown_{size}_pattern_{idx}.json |
 | SLURM logs | logs/%x-%A-%a.out |
-| WandB (offline) | verl/wandb/ |
+| WandB run dir (per-job) | /tmp/wandb_${SLURM_JOB_ID}/wandb/ (local; runs sync live in online mode) |
 | Models | USER-SPECIFIC — see personal CLAUDE.md |
 | Checkpoints | USER-SPECIFIC — see personal CLAUDE.md |
 
@@ -89,10 +89,11 @@ Research code for the paper **"How Does RL Post-training Induce Skill Compositio
 
 ### WandB
 
-- Mode: offline (WANDB_MODE=offline)
-- Project: countdown
+- Mode: **online by default** (`WANDB_MODE=online`). Compute nodes have outbound HTTPS; runs stream live to wandb.ai during training. Override with `WANDB_MODE=offline ...` if a node is air-gapped, then `wandb sync /tmp/wandb_<jobid>/wandb/offline-run-*` after.
+- `WANDB_DIR` is pinned to `/tmp/wandb_${SLURM_JOB_ID}` (NFS-backed home busts wandb-core's 30s `ServicePollForTokenError`). The local dir disappears with the node, so for online runs the live URL is the durable artifact.
+- Project: prog_distill (hard-coded in `trainer.project_name`)
 - Run name: {MODEL_NAME}-{exp_name} (e.g. Qwen2.5-1.5B-balanced-grpo-seed1)
-- Sync later with: wandb sync verl/wandb/offline-run-*/
+- Eval scores can be uploaded to wandb separately via `scripts/upload_evals_to_wandb.py` — reads `results/{model}/{exp}/global_step_*/*.{scores,lengths}` and logs per-step scalars.
 
 ### Checkpoints
 
@@ -317,8 +318,10 @@ Key deps: torch==2.6.0, transformers==4.51.1, vllm==0.8.5.post1, flash-attn==2.7
     # Tail a training log
     tail -f logs/train_grpo.sh-<jobid>-1.out
 
-    # Sync WandB after training
-    wandb sync verl/wandb/offline-run-*/
+    # Upload eval mean@1 / mean@32 / response length to wandb (one offline run; sync at end)
+    python3 scripts/upload_evals_to_wandb.py \
+        --results-dir results/{MODEL_NAME}/{EXP_NAME} \
+        --model {MODEL_NAME} --exp {EXP_NAME}
 
 ---
 
@@ -328,6 +331,7 @@ Key deps: torch==2.6.0, transformers==4.51.1, vllm==0.8.5.post1, flash-attn==2.7
 - val_kwargs.n: Was previously 7; corrected to 4 to match rollout.n=4.
 - Buggy runs: Any checkpoints from before the deduplication fix should be discarded.
 - Gemma-3-270m GRPO can OOM in actor/ref log-prob computation even though the model is smaller than Qwen2.5-0.5B. Cause: Gemma's vocab is much larger (262k vs Qwen 152k), so the lm_head logits tensor during `compute_log_prob` is huge. The failed runs `gemma-270m-balanced-grpo-lr1e-6-kl3e-3-seed1` and `gemma-270m-balanced-grpo-lr1e-6-kl1e-2-seed1` died after step 1 trying to allocate ~31 GiB at `modeling_gemma3.py:958`. For Gemma reruns, keep experiment hyperparams fixed and only lower memory microbatch knobs via `EXTRA_ARGS`: `actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=16 actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=16 actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4`. Do not bake these into defaults; Qwen runs should use the normal script defaults unless explicitly overridden.
+- `EXTRA_ARGS` vs `EVAL_EXTRA_ARGS`. `EXTRA_ARGS` is Hydra-style (`key=value`) and is consumed by `train_grpo.sh`/`train_ppo.sh` only. `eval.sh` reads `EVAL_EXTRA_ARGS` (argparse flags for `eval.py`). Previously both scripts read `EXTRA_ARGS`, so setting it for gemma training silently propagated through `run_pipeline.sh` into the eval jobs (eval.py argparse → `unrecognized arguments` → all 30 evals failed in ~1 min each). Always set the gemma microbatch knobs via `EXTRA_ARGS`; only set `EVAL_EXTRA_ARGS` if you actually have argparse flags to pass to `eval.py`.
 
 ---
 

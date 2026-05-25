@@ -22,8 +22,20 @@ else
     conda activate verl
 fi
 
-export WANDB_MODE="online"
+export WANDB_MODE="${WANDB_MODE:-online}"
 export WANDB_ENTITY="progressive_distill"
+# Put wandb-core's IPC port-file on local /tmp. The default lives under CWD
+# (which is the NFS-backed verl/ dir), and on Kempner compute nodes NFS
+# write-then-read latency reliably busts wandb-core's 30s service-startup
+# timeout — manifests as ServicePollForTokenError → job dies before step 1.
+export WANDB_DIR="/tmp/wandb_${SLURM_JOB_ID:-$$}"
+mkdir -p "${WANDB_DIR}"
+# Bump wandb-core's service-startup timeout (default 30s). 2/3 resubmits on
+# 2026-05-18 died at the 30s mark with ServicePollForTokenError even with
+# WANDB_DIR on local /tmp — wandb-core's IPC subprocess sometimes needs longer
+# to come up on Kempner compute nodes. 120s is well over the worst observed
+# warm-up; doesn't slow successful jobs.
+export WANDB__SERVICE_WAIT="${WANDB__SERVICE_WAIT:-120}"
 
 # Tag this wandb run so the post-distill GRPO leg is filterable alongside its SFT rounds.
 # DISTILL_MODE is set by run_pipeline.sh when this is the final GRPO stage of a (prog)distill chain.
@@ -94,39 +106,53 @@ echo "Project dir:      ${project_dir}"
 echo "============================================================"
 
 ulimit -n 65536
-ray stop 2>/dev/null || true
-rm -rf /tmp/ray/ 2>/dev/null || true
 export RAY_TMPDIR=/tmp/ray_${SLURM_JOB_ID}
+# Bump Ray's raylet startup wait (default 10s). One of the 2026-05-18 resubmits
+# died because the in-process raylet didn't register with GCS inside 10s on a
+# busy node. Ray's own error message literally suggests raising this; 60s gives
+# slow-starting nodes plenty of headroom and is no-op when startup is fast.
+export RAY_raylet_start_wait_time_s="${RAY_raylet_start_wait_time_s:-60}"
 
-# Per-job Ray port range. Ray's --temp-dir isolates the filesystem session
-# pointer, but the GCS server still binds the default port 6379. On shared
-# partitions (MIT mit_preemptable), two SLURM jobs can land on the same
-# compute node and race for that port — the loser sees "Session name ...
-# does not match persisted value" from _write_cluster_info_to_kv, then
-# python's ray.init() falls back to a local instance that can't talk to
-# the stale raylet socket. Deriving the port from SLURM_JOB_ID avoids
-# the collision entirely. Setting RAY_ADDRESS pins ray.init() to our head.
-# Per-job port plan. Cover EVERY component Ray pre-allocates — the
-# default dashboard_agent_http=52365, runtime_env_agent=48457, etc.
-# are fixed and will collide with our worker range otherwise, and
-# also collide cross-job when two SLURM jobs land on the same node.
-# Worker range kept tight (90 ports) to fit inside the per-job slot.
-RAY_PORT=$((20000 + (SLURM_JOB_ID % 300) * 100))
-export RAY_ADDRESS=127.0.0.1:${RAY_PORT}
-ray start --head \
-    --include-dashboard=false \
-    --num-gpus=${N_GPUS} \
-    --temp-dir=/tmp/ray_${SLURM_JOB_ID} \
-    --node-ip-address=127.0.0.1 \
-    --port=${RAY_PORT} \
-    --node-manager-port=$((RAY_PORT + 1)) \
-    --object-manager-port=$((RAY_PORT + 2)) \
-    --dashboard-agent-listen-port=$((RAY_PORT + 3)) \
-    --dashboard-agent-grpc-port=$((RAY_PORT + 4)) \
-    --runtime-env-agent-port=$((RAY_PORT + 5)) \
-    --metrics-export-port=$((RAY_PORT + 6)) \
-    --min-worker-port=$((RAY_PORT + 10)) \
-    --max-worker-port=$((RAY_PORT + 99))
+if [ "${CLUSTER:-}" = "mit" ]; then
+    # MIT mit_preemptable: multiple SLURM jobs can land on the same compute
+    # node and race for default Ray ports. Cleanup is safe here because each
+    # job runs its own external head and port-collides only with stale runs
+    # from prior preemptions on the same node — not with concurrent peers.
+    ray stop 2>/dev/null || true
+    rm -rf /tmp/ray/ 2>/dev/null || true
+
+    # Run an external `ray start --head` with per-job port isolation.
+    # Surgical fixes from prior debugging:
+    #   - Don't pass `--node-ip-address=127.0.0.1` (cosmetic; Ray rewrites
+    #     it to the LAN IP via resolve_ip_for_localhost anyway).
+    #   - Set RAY_ADDRESS to the same LAN IP Ray's get_node_ip_address()
+    #     produces, so the driver bootstraps without an address-rewrite step.
+    RAY_PORT=$((20000 + (SLURM_JOB_ID % 300) * 100))
+    NODE_IP=$(python3 -c 'import ray._private.services as s; print(s.get_node_ip_address())')
+    export RAY_ADDRESS="${NODE_IP}:${RAY_PORT}"
+    ray start --head \
+        --include-dashboard=false \
+        --num-gpus=${N_GPUS} \
+        --temp-dir=/tmp/ray_${SLURM_JOB_ID} \
+        --port=${RAY_PORT} \
+        --node-manager-port=$((RAY_PORT + 1)) \
+        --object-manager-port=$((RAY_PORT + 2)) \
+        --dashboard-agent-listen-port=$((RAY_PORT + 3)) \
+        --dashboard-agent-grpc-port=$((RAY_PORT + 4)) \
+        --runtime-env-agent-port=$((RAY_PORT + 5)) \
+        --metrics-export-port=$((RAY_PORT + 6)) \
+        --min-worker-port=$((RAY_PORT + 10)) \
+        --max-worker-port=$((RAY_PORT + 99))
+else
+    # Harvard kempner_h100: 4-GPU nodes can host two concurrent 2-GPU jobs.
+    # Do NOT run `ray stop` or `rm -rf /tmp/ray/` — both are process- and
+    # filesystem-scoped to the whole user on the host, and would kill a
+    # peer job's Ray instance. Skip the external head entirely and let
+    # verl's `ray.init()` (main_ppo.py:58) start an in-process Ray inside
+    # this python process. RAY_TMPDIR isolates the per-job session dir;
+    # the Ray instance dies naturally when python exits.
+    echo "Single-tenant or shared cluster: letting verl's ray.init() start in-process Ray (no global ray stop)."
+fi
 
 set -o pipefail
 python3 -m verl.trainer.main_ppo \
@@ -192,6 +218,10 @@ set +o pipefail
 
 chmod -R 770 ${output_dir}/${exp_name}
 
-ray stop
+if [ "${CLUSTER:-}" = "mit" ]; then
+    # Only safe to global-stop Ray on MIT's external-head path; on Harvard
+    # this would kill a peer job's in-process Ray on the same node.
+    ray stop
+fi
 
 exit $TRAIN_EXIT_CODE

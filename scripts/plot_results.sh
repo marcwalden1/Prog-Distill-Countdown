@@ -16,8 +16,13 @@ else
     conda activate verl
 fi
 
-export WANDB_MODE="online"
+export WANDB_MODE="${WANDB_MODE:-online}"
 export WANDB_ENTITY="progressive_distill"
+# Put wandb-core's IPC port-file on local /tmp — NFS-backed paths bust the
+# 30s service-startup timeout (ServicePollForTokenError). Matches train_grpo.sh.
+export WANDB_DIR="/tmp/wandb_${SLURM_JOB_ID:-$$}"
+mkdir -p "${WANDB_DIR}"
+export WANDB__SERVICE_WAIT="${WANDB__SERVICE_WAIT:-120}"
 export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 
 # User-specific default paths
