@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:4 # for 7B, use 8 GPUs
+#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:2 # for larger models, override with TRAIN_SBATCH_ARGS
 #SBATCH -N 1 -n 1
 #SBATCH --mem-per-gpu=96G
 #SBATCH --cpus-per-gpu 8
@@ -39,10 +39,15 @@ export WANDB__SERVICE_WAIT="${WANDB__SERVICE_WAIT:-120}"
 
 # Tag this wandb run so the post-distill GRPO leg is filterable alongside its SFT rounds.
 # DISTILL_MODE is set by run_pipeline.sh when this is the final GRPO stage of a (prog)distill chain.
+# Also tag by student model size (e.g. "270m", "0.5B", "1.5B") — derived from the trailing
+# segment of MODEL_NAME after the last hyphen. MODEL_NAME is the student in both standalone
+# GRPO and the post-distill GRPO leg, so this tag always reflects the model being trained.
 _grpo_tags="grpo"
 if [ -n "${DISTILL_MODE:-}" ]; then
     _grpo_tags="${DISTILL_MODE},grpo"
 fi
+_size_tag="${MODEL_NAME##*-}"
+_grpo_tags="${_grpo_tags},${_size_tag}"
 export WANDB_TAGS="${WANDB_TAGS:-${_grpo_tags}}"
 export RAY_DISABLE_DASHBOARD=1
 export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
@@ -83,6 +88,18 @@ test_path=../data/${data_source}/test.parquet
 
 output_dir=${CHECKPOINT_PATH:-${checkpoint_dir}/checkpoints/${model_name}}
 
+ppo_micro_batch_size_per_gpu=${PPO_MICRO_BATCH_SIZE_PER_GPU:-16}
+rollout_log_prob_micro_batch_size_per_gpu=${ROLLOUT_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU:-64}
+ref_log_prob_micro_batch_size_per_gpu=${REF_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU:-64}
+if [[ "${model_name,,}" == *gemma* ]]; then
+    ppo_micro_batch_size_per_gpu=${PPO_MICRO_BATCH_SIZE_PER_GPU:-4}
+    rollout_log_prob_micro_batch_size_per_gpu=${ROLLOUT_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU:-16}
+    ref_log_prob_micro_batch_size_per_gpu=${REF_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU:-16}
+fi
+
+# Give W&B's local service more time to start on busy cluster filesystems.
+export WANDB__SERVICE_WAIT=${WANDB__SERVICE_WAIT:-300}
+
 N_GPUS="$(( $(echo $SLURM_JOB_GPUS| grep -o , | wc -l) + 1 ))"
 
 echo "============================================================"
@@ -101,6 +118,9 @@ echo "KL coef:          ${kl_loss_coef}"
 echo "Rollout n:        ${rollout_n}"
 echo "Val kwargs n:     ${val_kwargs_n}"
 echo "Total steps:      ${total_steps}"
+echo "PPO microbatch:   ${ppo_micro_batch_size_per_gpu}"
+echo "Rollout logprob:  ${rollout_log_prob_micro_batch_size_per_gpu}"
+echo "Ref logprob:      ${ref_log_prob_micro_batch_size_per_gpu}"
 echo "Checkpoint path:  ${output_dir}/${exp_name}"
 echo "Project dir:      ${project_dir}"
 echo "============================================================"
@@ -169,7 +189,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.actor.optim.lr=${lr} \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=256 \
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16 \
+    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=${ppo_micro_batch_size_per_gpu} \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef=${kl_loss_coef} \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
@@ -178,7 +198,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.fsdp_config.param_offload=False \
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=False \
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=64 \
+    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=${rollout_log_prob_micro_batch_size_per_gpu} \
     actor_rollout_ref.rollout.tensor_model_parallel_size=1 \
     actor_rollout_ref.rollout.name=vllm \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
@@ -186,7 +206,7 @@ python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.val_kwargs.n=${val_kwargs_n} \
     actor_rollout_ref.rollout.val_kwargs.do_sample=True \
     actor_rollout_ref.rollout.val_kwargs.temperature=1.0 \
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=64 \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=${ref_log_prob_micro_batch_size_per_gpu} \
     actor_rollout_ref.ref.fsdp_config.param_offload=True \
     algorithm.use_kl_in_reward=False \
     algorithm.norm_adv_by_std_in_grpo=False \

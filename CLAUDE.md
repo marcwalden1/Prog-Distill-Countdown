@@ -431,3 +431,195 @@ Both patches are kept — the vLLM edit is the canonical fix; the verl edit is d
 | 3b | `verl/verl/utils/dataset/sft_dataset.py` | chat_template fallback (SFT dataset) |
 | 4 verl | `verl/verl/workers/sharding_manager/fsdp_vllm.py` (`update_params`) | gemma3 normalizer buffer restore |
 | 4 vLLM | `<conda env>/lib/python3.10/site-packages/vllm/model_executor/models/gemma3.py` line ~372 | `persistent=False` on normalizer buffer |
+
+---
+
+## Current experiment handoff (May 25, 2026)
+
+This section is a compact memory dump from the May 2026 Gemma/Qwen distillation and GRPO work. Prefer it over older chat memory when continuing the experiment.
+
+### Repo / branch state
+
+- Branch: `my-feature`.
+- Latest pushed local changes as of May 22/25 include:
+  - `Tag training runs and link artifact dirs`
+  - `Default GRPO jobs to two H100s`
+  - `Tag W&B runs and harden Gemma GRPO jobs`
+- The remote branch moved while pushing; local commits were rebased on top of Marc's remote commits and the user successfully pushed.
+- Important code changes now in the repo:
+  - `scripts/train_grpo.sh` defaults GRPO training to **2 H100s** instead of 4.
+  - For Gemma GRPO, `scripts/train_grpo.sh` automatically uses Gemma-safe microbatches:
+    - `actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=4`
+    - `actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=16`
+    - `actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=16`
+  - `WANDB__SERVICE_WAIT` default is 300 seconds to reduce W&B startup failures.
+  - `plot_results.py`, `scripts/train_sft.sh`, and `scripts/train_grpo.sh` tag W&B runs by stage/mode/model size where possible.
+  - `scripts/backfill_wandb_tags.py` exists for W&B tag backfill, but mutating some older Qwen runs failed with 403 permissions.
+  - `scripts/run_pipeline.sh` passes `EVAL_EXTRA_ARGS` through to eval jobs.
+
+### W&B / auth notes
+
+- W&B project/entity: `progressive_distill/prog_distill`.
+- `wandb status` may show `api_key: null` even after login because credentials are stored in `~/.netrc`; that is normal for this CLI.
+- Backfill script command:
+
+    env -u WANDB_API_KEY /n/home06/sdholakia/.conda/envs/verl/bin/python3 scripts/backfill_wandb_tags.py --quiet
+
+- If the backfill emits 403s, the key is valid but lacks write access to those runs. Have the run owner/admin grant write permission or run the script from the owner account.
+
+### Official Qwen student choices
+
+After checking W&B directly:
+
+| Qwen student | Official SFT LR | Evidence |
+|---|---:|---|
+| progdistill | `1e-6` | finished run `Qwen2.5-0.5B-balanced-progdistill-sftlr1e-6-grpo-lr1e-6-kl3e-4-seed1` (`2oeru148`) and eval `48cfb75b` |
+| vanilla distill | `3e-5` | clean finished/evaled candidate `Qwen2.5-0.5B-balanced-distill-sftlr3e-5-grpo-lr1e-6-kl3e-4-seed1`; previous same-name run is archived locally as `...-seed1-obsolete` |
+
+The Qwen progdistill student that was uploaded/used for Marc to recreate GRPO was the `sftlr=1e-6` student. It was uploaded as a subfolder into `https://huggingface.co/shlokdho/qwen2.5-1.5b-countdown-teacher`, not a new repo.
+
+### Pure Gemma SFT student results
+
+These are final pure distill/progdistill student evals for `gemma-3-270m`, from local `.scores` files under `results/gemma-3-270m`. Each cell is `mean@1 / mean@32`.
+
+**Vanilla distill**
+
+| SFT LR | n=3/4 | n=5 | n=6 |
+|---:|---:|---:|---:|
+| `3e-6` | `0.1043 / 0.1961` | `0.0200 / 0.1196` | `0.0010 / 0.1000` |
+| `1e-5` | `0.4183 / 0.4687` | `0.0890 / 0.1667` | `0.0020 / 0.0990` |
+| `3e-5` | `0.5697 / 0.6003` | `0.1250 / 0.1854` | `0.0030 / 0.0846` |
+| `1e-4` | `0.6309 / 0.6672` | `0.1890 / 0.2487` | `0.0050 / 0.0885` |
+| `3e-4` | `0.6630 / 0.6656` | `0.2060 / 0.2588` | `0.0100 / 0.0911` |
+
+**Progressive distill**
+
+| SFT LR | n=3/4 | n=5 | n=6 |
+|---:|---:|---:|---:|
+| `3e-6` | `0.1174 / 0.1860` | `0.0130 / 0.1013` | `0.0010 / 0.0869` |
+| `3e-5` | `0.5647 / 0.6061` | `0.1670 / 0.2353` | `0.0060 / 0.0963` |
+| `1e-4` | `0.6038 / 0.6241` | missing | missing |
+| `3e-4` | `0.6058 / 0.6207` | `0.1600 / 0.2361` | `0.0100 / 0.0915` |
+
+Interpretation used for supervisor discussion: `sftlr=1e-4` is defensible for both Gemma students because it is best on progdistill n=3/4 and very close to the best distill setting, giving an apples-to-apples student comparison.
+
+### Important missing eval / failed eval
+
+Progdistill `sftlr=1e-4` n=5 and n=6 are **still missing** despite Slurm marking jobs completed:
+
+- `14445270_1` attempted `balanced5`.
+- `14445271_1` attempted `balanced6`.
+- Both logs show vLLM engine initialization failed before result JSONs were written.
+- Failure root cause in the log: Torch/vLLM compile cache load failed with `JSONDecodeError: Extra data` inside `torch._inductor.remote_cache` / vLLM torch compile cache.
+- The plot job `14445272` completed, but it only plotted n=3/4 and skipped n=5/n=6 because the result JSONs did not exist.
+- To fill these rows, resubmit those two evals with a clean/isolated Torch/vLLM compile cache or eager/no-compile settings if available through `EVAL_EXTRA_ARGS` / environment.
+
+### Base Gemma GRPO held-out evals
+
+Base Gemma GRPO validation mean@4 clustered around 0.10, but held-out eval mean@1 was flat zero. Final held-out results:
+
+| GRPO lr | KL | n=3/4 | n=5 | n=6 |
+|---:|---:|---:|---:|---:|
+| `1e-6` | `3e-4` | `0.0000 / 0.0896` | `0.0000 / 0.0893` | `0.0000 / 0.0903` |
+| `1e-6` | `1e-3` | `0.0000 / 0.0432` | `0.0000 / 0.0415` | `0.0000 / 0.0415` |
+| `1e-6` | `3e-3` | `0.0000 / 0.0427` | `0.0000 / 0.0422` | `0.0000 / 0.0423` |
+| `3e-6` | `3e-4` | `0.0000 / 0.0421` | `0.0000 / 0.0411` | `0.0000 / 0.0336` |
+| `3e-6` | `1e-3` | `0.0000 / 0.0336` | `0.0000 / 0.0371` | `0.0000 / 0.0365` |
+| `3e-6` | `3e-3` | `0.0000 / 0.0454` | `0.0000 / 0.0385` | `0.0000 / 0.0433` |
+| `1e-5` | `3e-4` | `0.0000 / 0.0952` | `0.0000 / 0.0949` | `0.0000 / 0.0949` |
+| `1e-5` | `1e-3` | `0.0000 / 0.0620` | `0.0000 / 0.0610` | `0.0000 / 0.0605` |
+| `1e-5` | `3e-3` | `0.0000 / 0.0446` | `0.0000 / 0.0446` | `0.0000 / 0.0477` |
+
+Cause of train/eval divergence: training validation was giving mostly format reward under teacher-forced sampling/validation conditions, while held-out eval at temp 0.6 produced format-valid wrong answers. Do not present validation mean@4 as held-out success.
+
+### Student GRPO selected completed points
+
+Main Gemma student-GRPO comparison uses `sftlr=1e-4` students and GRPO `lr=1e-6, kl=3e-4` as a conservative shared setting motivated by base-Gemma sweeps where `kl=3e-4` was consistently strong. Completed W&B/local selected metrics:
+
+| Student | GRPO lr | KL | n=3/4 mean@32 | n=5 mean@32 | n=6 mean@32 |
+|---|---:|---:|---:|---:|---:|
+| distill `sftlr=1e-4` | `1e-6` | `3e-4` | `0.8985` | `0.2602` | `0.1010` |
+| progdistill `sftlr=1e-4` | `1e-6` | `3e-4` | `0.8701` | `0.2943` | `0.1020` |
+
+Other completed student-GRPO points from Marc/W&B:
+
+| Student | GRPO lr | KL | n=3/4 mean@32 | n=5 mean@32 | n=6 mean@32 |
+|---|---:|---:|---:|---:|---:|
+| distill `sftlr=1e-4` | `1e-6` | `3e-3` | `0.8830` | `0.3111` | `0.1034` |
+| progdistill `sftlr=1e-4` | `1e-6` | `3e-3` | `0.8517` | `0.3674` | `0.1051` |
+
+### Student-GRPO training/rerun status from May 22
+
+The failed/partial student-GRPO sweep was resubmitted with 2 H100s, 12h walltime, Gemma-safe microbatches, evals, and plots chained. Train job IDs:
+
+- `14547738` progdistill sftlr1e-4 lr1e-5 kl1e-3
+- `14547766` progdistill sftlr1e-4 lr1e-5 kl3e-3
+- `14547803` distill sftlr1e-4 lr1e-6 kl1e-3
+- `14547831` progdistill sftlr1e-4 lr3e-6 kl3e-4
+- `14547866` progdistill sftlr1e-4 lr3e-6 kl3e-3
+- `14547892` distill sftlr1e-4 lr1e-5 kl3e-3
+- `14547929` distill sftlr1e-4 lr3e-6 kl3e-4 early400
+- `14547981` distill sftlr1e-4 lr3e-6 kl1e-3
+- `14548007` distill sftlr1e-4 lr3e-6 kl3e-3
+- `14548026` progdistill sftlr1e-4 lr1e-6 kl1e-3
+- `14548041` progdistill sftlr1e-4 lr1e-5 kl3e-4
+
+If continuing after May 25, first check `sacct`/`squeue` for these IDs and inspect logs before resubmitting.
+
+### Hugging Face handoff for Marc
+
+Gemma students used for GRPO were uploaded as subfolders to `shlokdho/qwen2.5-1.5b-countdown-teacher`. Marc's agent should download those subfolders, point GRPO `MODEL_PATH` / checkpoint path at the downloaded HF model directories, and run the same `lr=1e-6, kl=3e-4` GRPO pipeline with eval+plot chaining.
+
+Qwen 0.5B vanilla-distill `sftlr=1e-5` seed1 SFT student exists locally at:
+
+`/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/rl-checkpoints/sft-checkpoints/Qwen2.5-0.5B/balanced-distill-teacher-t1p5b-lr3e-6-kl3e-3-step1600-n4-sftlr1e-5-seed1`
+
+It was uploaded to Hugging Face on 2026-05-25 as:
+
+`https://huggingface.co/shlokdho/qwen2.5-1.5b-countdown-teacher/tree/main/qwen2.5-0.5b-distill-sftlr1e-5-seed1`
+
+Use that HF subfolder for Marc's Qwen 0.5B distill `sftlr=1e-5` GRPO-on-top run at `grpo_lr=1e-6`, `grpo_kl=3e-4`, seed1.
+
+### Qwen 0.5B ID/OOD Pareto data status
+
+The current Qwen plotting task is to compare ID `balanced` (n=3/4) on the x-axis against OOD `balanced5` (n=5) and `balanced6` (n=6) on the y-axis, separately for `mean@1` and `mean@32`, for distill/progdistill pre-GRPO and GRPO-on-top checkpoints.
+
+Tracked analysis tables live in `analysis_data/`:
+
+- `qwen05b_grpo_on_top_pareto_eval.csv`: score rows used for plotting.
+- `qwen05b_distill_grpo_run_registry.csv`: run/checkpoint/eval roots.
+- `qwen05b_distill_grpo_eval_inventory.csv`: per-step eval availability.
+- `qwen05b_seed1_distill_eval_backfill_jobs.csv`: SLURM eval arrays submitted for missing seed1 distill evals.
+
+Canonical Qwen 0.5B distill+GRPO checkpoint root for the seed1/seed21 inventory:
+
+`/n/netscratch/kempner_bingbin_lab/Lab/sdholakia/archive/rl-checkpoints/checkpoints/Qwen2.5-0.5B`
+
+When using `scripts/eval.sh` against that archive, pass:
+
+`CHECKPOINT_DIR=/n/netscratch/kempner_bingbin_lab/Lab/sdholakia/archive/rl-checkpoints`
+
+Seed1 vanilla-distill eval backfill submitted on 2026-05-25:
+
+| Job ID | Run | Dataset | Steps |
+|---:|---|---|---|
+| `15572281` | `sftlr3e-5` | `balanced` | `750,900,1050,1200,1400,1600` |
+| `15572285` | `sftlr3e-5` | `balanced5` | all standard steps |
+| `15572287` | `sftlr3e-5` | `balanced6` | all standard steps |
+| `15572288` | `sftlr3e-6` | `balanced` | all standard steps |
+| `15572290` | `sftlr3e-6` | `balanced5` | all standard steps |
+| `15572293` | `sftlr3e-6` | `balanced6` | all standard steps |
+
+After those jobs complete, rerun:
+
+```bash
+python3 scripts/inventory_qwen05b_distill_grpo_runs.py
+python3 scripts/export_pareto_eval_data.py
+```
+
+Then commit the refreshed CSVs if the eval JSONs/scores landed under `results/Qwen2.5-0.5B`.
+
+### Storage / archive notes
+
+- Qwen2.5-0.5B checkpoint trees were copied/archived toward net scratch; older cleanup/archive jobs were used. Re-check lab vs netscratch before deleting anything.
+- Do not assume Slurm `COMPLETED` means eval JSON exists; always check `results/.../*.json` and `.scores`, especially for Gemma evals.

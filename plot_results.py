@@ -408,6 +408,33 @@ def main():
 # WandB logging
 # ---------------------------------------------------------------------------
 
+def wandb_tags_for_run(model_name, exp_name, condition=None, stage="eval"):
+    tags = [stage]
+
+    inferred_condition = condition
+    if inferred_condition is None:
+        if "progdistill" in exp_name:
+            inferred_condition = "progdistill"
+        elif "distill" in exp_name:
+            inferred_condition = "distill"
+        else:
+            inferred_condition = "rl-only"
+
+    tags.append(inferred_condition)
+    if "grpo" in exp_name:
+        tags.append("grpo")
+    elif stage == "eval":
+        tags.append("sft")
+    tags.append(model_name.split("-")[-1])
+
+    for tag in os.environ.get("WANDB_TAGS", "").split(","):
+        tag = tag.strip()
+        if tag:
+            tags.append(tag)
+
+    return list(dict.fromkeys(tags)), inferred_condition
+
+
 def log_to_wandb(model_name, exp_name, val_curve, metrics_by_dataset, lengths_by_dataset,
                  condition=None):
     # Namespace by user so two people running the same exp_name don't collide
@@ -416,16 +443,8 @@ def log_to_wandb(model_name, exp_name, val_curve, metrics_by_dataset, lengths_by
     user = os.environ.get("USER", "unknown")
     run_id = hashlib.md5(f"{user}-{model_name}-{exp_name}-eval".encode()).hexdigest()[:8]
 
-    # Infer condition from exp_name if not provided
-    if condition is None:
-        if "progdistill" in exp_name:
-            condition = "progdistill"
-        elif "distill" in exp_name:
-            condition = "distill"
-        else:
-            condition = "rl-only"
-
-    tags = ["eval", condition, f"user:{user}"]
+    tags, condition = wandb_tags_for_run(model_name, exp_name, condition, stage="eval")
+    tags.append(f"user:{user}")   # keep per-user filtering tag (helper omits it)
 
     # Pass x_service_wait directly via Settings — relying on WANDB__SERVICE_WAIT
     # env var has been unreliable on FAS-RC compute nodes (job 13718245 still
