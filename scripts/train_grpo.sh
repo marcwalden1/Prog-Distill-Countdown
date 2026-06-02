@@ -30,12 +30,7 @@ export WANDB_ENTITY="progressive_distill"
 # timeout — manifests as ServicePollForTokenError → job dies before step 1.
 export WANDB_DIR="/tmp/wandb_${SLURM_JOB_ID:-$$}"
 mkdir -p "${WANDB_DIR}"
-# Bump wandb-core's service-startup timeout (default 30s). 2/3 resubmits on
-# 2026-05-18 died at the 30s mark with ServicePollForTokenError even with
-# WANDB_DIR on local /tmp — wandb-core's IPC subprocess sometimes needs longer
-# to come up on Kempner compute nodes. 120s is well over the worst observed
-# warm-up; doesn't slow successful jobs.
-export WANDB__SERVICE_WAIT="${WANDB__SERVICE_WAIT:-120}"
+# WANDB__SERVICE_WAIT is set later (line ~100) to 300s via the same pattern.
 
 # Tag this wandb run so the post-distill GRPO leg is filterable alongside its SFT rounds.
 # DISTILL_MODE is set by run_pipeline.sh when this is the final GRPO stage of a (prog)distill chain.
