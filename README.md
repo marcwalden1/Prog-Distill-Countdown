@@ -1,10 +1,7 @@
 ## How Does RL Post-training Induce Skill Composition? A Case Study Using Countdown
 
-This repository contains the code for our paper: How Does RL Post-training Induce Skill Composition? A Case Study Using Countdown.
+This repository is adapted from the official implementation accompanying the paper "How Does RL Post-training Induce Skill Composition? A Case Study Using Countdown" by Park et al. The codebase is adapted from the authors' original implementation and includes additional experiments, analyses, and modifications developed in this repository.
 
-**************************** **Updates** ****************************
-* 12/01/2025: Our paper is on [arXiv](https://arxiv.org/abs/2512.01775).
-* 12/01/2025: Our paper is accepted as a Spotlight poster at the [Efficient Reasoning Workshop](https://openreview.net/forum?id=qqR4hUUfbe) and as a poster at the [MATH-AI Workshop](https://openreview.net/forum?id=5KqwASPclR) at NeurIPS 2025. See you in San Diego!
 
 ## Quick Links
 
@@ -15,12 +12,11 @@ This repository contains the code for our paper: How Does RL Post-training Induc
   - [Prepare Base Models](#prepare-base-models)
   - [Generate Data](#generate-data)
   - [Example Scripts](#example-scripts)
-- [Bugs or Questions?](#bugs-or-questions)
-- [Citation](#citation)
+
 
 ## Experiments
 
-In the following section, we provide instructions on reproducing the experiments in our paper.
+Installation and setup walkthrough. 
 
 ### Prepare Conda Environment
 ```Shell
@@ -115,18 +111,4 @@ export EXP_NAME=balanced-grpo-seed1
 sbatch --dependency=afterok:${jobid} scripts/analyze.sh ## after evaluation is complete
 ```
 
-## Bugs or Questions?
 
-If you have any questions related to the code or the paper, feel free to email Simon (juhyunp 'at' princeton 'dot' edu) and Simran (skaur 'at' princeton 'dot' edu). If you encounter any problems when using the code, or want to report a bug, you can open an issue. Please try to specify the problem with details so we can give more effective help!
-
-## Citation
-
-@misc{parkkaur2025RLskillcomposition,
-      title={How Does RL Post-training Induce Skill Composition? A Case Study on Countdown}, 
-      author={Simon Park and Simran Kaur and Sanjeev Arora},
-      year={2025},
-      eprint={2512.01775},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2512.01775}, 
-}
