@@ -34,7 +34,8 @@ def main(args):
     dataset = dataset.map(lambda x: generate_r1_prompt(x))
     prompts = dataset["prompt"]
 
-    llm = LLM(checkpoint_path, tensor_parallel_size=torch.cuda.device_count(), dtype="bfloat16", trust_remote_code=True)
+    llm = LLM(checkpoint_path, tensor_parallel_size=torch.cuda.device_count(), dtype="bfloat16",
+              trust_remote_code=True, enforce_eager=args.enforce_eager)
     sampling_params = SamplingParams(
         temperature=args.temperature, 
         top_p=1, 
@@ -60,6 +61,8 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--n", type=int, default=32)
     parser.add_argument("--max_tokens", type=int, default=1024)
+    parser.add_argument("--enforce_eager", action="store_true",
+                        help="Disable vLLM CUDA graph / torch.compile (avoids cache corruption errors)")
     args = parser.parse_args()
 
     main(args)

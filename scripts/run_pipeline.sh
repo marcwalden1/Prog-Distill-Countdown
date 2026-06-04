@@ -107,7 +107,8 @@ if [ "$USER" = "mwalden" ]; then
     _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models
     _account=kempner_kdbrantley_lab
     _train_partition=kempner_h100
-    _eval_partition=kempner_h100
+    _eval_partition=kempner_requeue
+    _eval_account=kempner_kdbrantley_lab
     _plot_extra=""
     _plot_partition=serial_requeue
     _plot_account=kdbrantley_lab
@@ -117,6 +118,7 @@ elif [ "$USER" = "sdholakia" ]; then
     _account=kempner_bingbin_lab
     _train_partition=kempner_h100
     _eval_partition=kempner_requeue
+    _eval_account=kempner_bingbin_lab
     _plot_extra="--gres=gpu:nvidia_h100_80gb_hbm3:1"
     _plot_partition=kempner_requeue
     _plot_account=kempner_bingbin_lab
@@ -138,6 +140,8 @@ else
     echo "ERROR: Unknown user $USER. Set CHECKPOINT_DIR and MODEL_DIR explicitly." >&2
     exit 1
 fi
+# Default eval account to train account if not set per-user above.
+_eval_account=${_eval_account:-$_account}
 checkpoint_dir=${CHECKPOINT_DIR:-$_checkpoint_dir}
 model_dir=${MODEL_DIR:-$_model_dir}
 
@@ -439,7 +443,7 @@ if [ -n "${FINAL_JID:-}" ]; then
             EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
             EVAL_RESULT_PATH="${eval_result_base}" \
             sbatch --parsable \
-                --partition=$_eval_partition --account=$_account \
+                --partition=$_eval_partition --account=$_eval_account \
                 --array=1-1 \
                 --dependency=afterok:${FINAL_JID} \
                 ${EVAL_SBATCH_ARGS} \
@@ -448,7 +452,7 @@ if [ -n "${FINAL_JID:-}" ]; then
             EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
             EVAL_RESULT_PATH="${eval_result_base}" \
             sbatch --parsable \
-                --partition=$_eval_partition --account=$_account \
+                --partition=$_eval_partition --account=$_eval_account \
                 --array=1-1 \
                 --dependency=afterok:${FINAL_JID} \
                 ${EVAL_SBATCH_ARGS} \
@@ -457,24 +461,24 @@ if [ -n "${FINAL_JID:-}" ]; then
             EVAL_CHECKPOINT_PATH="${FINAL_EVAL_CKPT}" \
             EVAL_RESULT_PATH="${eval_result_base}" \
             sbatch --parsable \
-                --partition=$_eval_partition --account=$_account \
+                --partition=$_eval_partition --account=$_eval_account \
                 --array=1-1 \
                 --dependency=afterok:${FINAL_JID} \
                 ${EVAL_SBATCH_ARGS} \
                 scripts/eval.sh)
     else
         EVAL_JID1=$(EXTRA_ARGS="${EVAL_EXTRA_ARGS:-}" EVAL_DATASET=balanced  sbatch --parsable \
-            --partition=$_eval_partition --account=$_account \
+            --partition=$_eval_partition --account=$_eval_account \
             --dependency=afterok:${FINAL_JID} \
             ${EVAL_SBATCH_ARGS} \
             scripts/eval.sh)
         EVAL_JID2=$(EXTRA_ARGS="${EVAL_EXTRA_ARGS:-}" EVAL_DATASET=balanced5 sbatch --parsable \
-            --partition=$_eval_partition --account=$_account \
+            --partition=$_eval_partition --account=$_eval_account \
             --dependency=afterok:${FINAL_JID} \
             ${EVAL_SBATCH_ARGS} \
             scripts/eval.sh)
         EVAL_JID3=$(EXTRA_ARGS="${EVAL_EXTRA_ARGS:-}" EVAL_DATASET=balanced6 sbatch --parsable \
-            --partition=$_eval_partition --account=$_account \
+            --partition=$_eval_partition --account=$_eval_account \
             --dependency=afterok:${FINAL_JID} \
             ${EVAL_SBATCH_ARGS} \
             scripts/eval.sh)
