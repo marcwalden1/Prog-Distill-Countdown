@@ -505,14 +505,13 @@ Interpretation used for supervisor discussion: `sftlr=1e-4` is defensible for bo
 
 ### Important missing eval / failed eval
 
-Progdistill `sftlr=1e-4` n=5 and n=6 are **still missing** despite Slurm marking jobs completed:
+~~Progdistill `sftlr=1e-4` n=5 and n=6 are still missing~~ **Resolved 2026-06-04.** Evals rerun with `--enforce_eager` (bypasses vLLM compile cache; see `eval.py`). Final scored values (all 4620 / 3519 prompts, same metric as `plot_results.py`):
 
-- `14445270_1` attempted `balanced5`.
-- `14445271_1` attempted `balanced6`.
-- Both logs show vLLM engine initialization failed before result JSONs were written.
-- Failure root cause in the log: Torch/vLLM compile cache load failed with `JSONDecodeError: Extra data` inside `torch._inductor.remote_cache` / vLLM torch compile cache.
-- The plot job `14445272` completed, but it only plotted n=3/4 and skipped n=5/n=6 because the result JSONs did not exist.
-- To fill these rows, resubmit those two evals with a clean/isolated Torch/vLLM compile cache or eager/no-compile settings if available through `EVAL_EXTRA_ARGS` / environment.
+| | n=5 mean@1 | n=5 mean@32 | n=6 mean@1 | n=6 mean@32 |
+|---|---|---|---|---|
+| progdistill `sftlr=1e-4` | `0.1229` | `0.1909` | `0.0043` | `0.0863` |
+
+`.scores` cache files written to `results/gemma-3-270m/balanced-progdistill-sftlr1e-4-seed1/global_step_1600/`. Original failure: `JSONDecodeError: Extra data` in `torch._inductor.remote_cache` / vLLM torch compile cache — fixed permanently by adding `--enforce_eager` flag to `eval.py` and passing `EVAL_EXTRA_ARGS="--enforce_eager"` at submission.
 
 ### Base Gemma GRPO held-out evals
 
@@ -623,3 +622,67 @@ Then commit the refreshed CSVs if the eval JSONs/scores landed under `results/Qw
 
 - Qwen2.5-0.5B checkpoint trees were copied/archived toward net scratch; older cleanup/archive jobs were used. Re-check lab vs netscratch before deleting anything.
 - Do not assume Slurm `COMPLETED` means eval JSON exists; always check `results/.../*.json` and `.scores`, especially for Gemma evals.
+
+---
+
+## HuggingFace backup (2026-06-04)
+
+Harvard cluster access was removed on 2026-06-04. Everything important was backed up to HuggingFace under `marcwalden`. Starting fresh on a new cluster: download what you need from the repos below.
+
+### Trained model checkpoints (step_1600 only)
+
+| HF repo | Contents |
+|---|---|
+| `marcwalden/qwen2.5-0.5b-countdown` | 7 Qwen2.5-0.5B GRPO runs (distill/progdistill across sftlr ∈ {1e-5,1e-6,3e-5} and kl ∈ {3e-4,3e-3}), each as a subfolder named by `EXP_NAME` |
+| `marcwalden/qwen2.5-1.5b-countdown` | 2 Qwen2.5-1.5B GRPO runs: `balanced-grpo-kl3e-3-lr3e-6-seed1` (canonical teacher) and `shlok-best-1point5-model` |
+| `marcwalden/gemma-3-270m-countdown` | 5 Gemma-3-270m GRPO runs: 4 student-GRPO (distill/progdistill × kl3e-4/kl3e-3) + 1 base GRPO |
+| `marcwalden/gemma-3-270m-distill-sftlr1e-4-seed1` | Gemma distill sftlr=1e-4 SFT student (round_1600) |
+| `marcwalden/gemma-3-270m-progdistill-sftlr1e-4-seed1-round_1600` | Gemma progdistill sftlr=1e-4 SFT student (round_1600) |
+| `marcwalden/qwen2.5-0.5b-distill-sftlr1e-5-seed1` | Qwen2.5-0.5B distill sftlr=1e-5 SFT student |
+| `marcwalden/qwen2.5-0.5b-progdistill-sftlr1e-6-seed1` | Qwen2.5-0.5B progdistill sftlr=1e-6 SFT student |
+| `marcwalden/rl-skill-comp-sft-students` | All 6 SFT round_1600 students as subfolders (Qwen2.5-0.5B × 5 sftlr variants + Gemma progdistill sftlr=1e-4) |
+| `shlokdho/qwen2.5-1.5b-countdown-teacher` | Shlok's 1.5B teacher + Qwen2.5-0.5B distill sftlr=1e-5 seed1 student (subfolders) |
+
+Download a checkpoint for inference/eval:
+```bash
+huggingface-cli download marcwalden/qwen2.5-0.5b-countdown \
+  --include "balanced-distill-sftlr1e-5-grpo-lr1e-6-kl3e-4-seed1/*" \
+  --local-dir ./checkpoints/Qwen2.5-0.5B
+```
+
+### Eval results and data (HF dataset)
+
+`marcwalden/rl-skill-comp-evals` contains:
+
+| Path in dataset | Contents |
+|---|---|
+| `Qwen2.5-0.5B/` | All eval JSONs + `.scores`/`.lengths` caches for every Qwen 0.5B GRPO run at all 10 steps |
+| `Qwen2.5-1.5B/` | Same for Qwen 1.5B runs |
+| `gemma-3-270m/` | Same for all Gemma runs (GRPO + pure SFT students) |
+| `baselines/` | Baseline eval JSONs |
+| `data/` | Train/test parquet files (`balanced/`, `balanced5/`, `balanced6/`) — the exact puzzle splits used |
+| `sft-data/` | Teacher rollout parquets for all SFT rounds (81 MB) |
+| `figures/` | All Pareto plots and training curves |
+
+Download just the scores (tiny, sufficient for plotting/analysis):
+```bash
+huggingface-cli download marcwalden/rl-skill-comp-evals --repo-type dataset \
+  --include "**/*.scores" --include "**/*.lengths" --local-dir ./results
+```
+
+Download everything:
+```bash
+huggingface-cli download marcwalden/rl-skill-comp-evals --repo-type dataset \
+  --local-dir ./results
+```
+
+### Code
+
+- RL training code: GitHub `marcwalden1/Prog-Distill-Countdown` (branch `my-feature`)
+- `analysis_data/` CSVs (Qwen 0.5B Pareto run registry + inventory) are git-tracked in the repo
+
+### Metric definitions (for reading `.scores` files)
+
+`.scores` files are JSON arrays `[step, mean@1, mean@32]` where:
+- **mean@1** = fraction of prompts where `outputs[0]` is exactly correct (binary, averaged over prompts)
+- **mean@32** = average raw `compute_score()` over all 32 outputs per prompt, then averaged over prompts (scores are 0.0 / 0.1 / 1.0 — not pass@32)
