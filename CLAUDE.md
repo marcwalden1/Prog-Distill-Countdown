@@ -686,3 +686,12 @@ huggingface-cli download marcwalden/rl-skill-comp-evals --repo-type dataset \
 `.scores` files are JSON arrays `[step, mean@1, mean@32]` where:
 - **mean@1** = fraction of prompts where `outputs[0]` is exactly correct (binary, averaged over prompts)
 - **mean@32** = average raw `compute_score()` over all 32 outputs per prompt, then averaged over prompts (scores are 0.0 / 0.1 / 1.0 — not pass@32)
+
+## Data backups (2026-06-04)
+Harvard cluster access removed. All data backed up:
+| What | Where |
+|---|---|
+| Fine-tuned Gemma models | HF `marcwalden/gemma-3-270m-distill-sftlr1e-4-seed1`, `marcwalden/gemma-3-270m-progdistill-sftlr1e-4-seed1-round_1600` |
+| Fine-tuned Qwen models | HF `marcwalden/qwen2.5-0.5b-distill-sftlr1e-5-seed1`, `marcwalden/qwen2.5-0.5b-progdistill-sftlr1e-6-seed1` |
+| EoSS experiment results | HF dataset `marcwalden/eoss-results` |
+| This code repo | GitHub `marcwalden1/RL-skill-comp` |
