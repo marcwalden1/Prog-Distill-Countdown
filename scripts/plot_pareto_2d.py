@@ -156,8 +156,7 @@ def main():
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "figures", args.model, "pareto")
 
-    caveat = (f"distill-exp={args.distill_exp}  |  progdistill-exp={args.progdistill_exp}  |  "
-              "GRPO: kl=3e-4, lr=1e-6, seed=1")
+    caveat = (f"distill-exp={args.distill_exp}  |  progdistill-exp={args.progdistill_exp}")
 
     exps = {"distill→GRPO": args.distill_exp,
             "progdistill→GRPO": args.progdistill_exp}
