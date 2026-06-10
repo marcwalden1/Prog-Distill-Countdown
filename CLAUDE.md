@@ -695,3 +695,63 @@ Harvard cluster access removed. All data backed up:
 | Fine-tuned Qwen models | HF `marcwalden/qwen2.5-0.5b-distill-sftlr1e-5-seed1`, `marcwalden/qwen2.5-0.5b-progdistill-sftlr1e-6-seed1` |
 | EoSS experiment results | HF dataset `marcwalden/eoss-results` |
 | This code repo | GitHub `marcwalden1/RL-skill-comp` |
+
+---
+
+## Pareto-domination analysis: distill→GRPO vs progdistill→GRPO (2026-06-09)
+
+Question: does **progdistill→GRPO** Pareto-dominate **distill→GRPO** — better on
+*both* in-dist (`balanced`, n=3,4) and OOD (`balanced5`/`balanced6`, n=5,6) —
+holding GRPO hyperparams (sftlr, lr, kl) fixed? Plan: `~/.claude/plans/swift-wibbling-toast.md`.
+
+New script **`scripts/plot_pareto_2d.py`** (run locally with
+`/n/home06/mwalden/.conda/envs/verl/bin/python3`, reads only the tiny `.scores`
+caches — no sbatch/OOM risk):
+
+```bash
+python3 scripts/plot_pareto_2d.py \
+  --result-dir /n/netscratch/kdbrantley_lab/Lab/mwalden/rl-skill-comp-results/results \
+  --model <Qwen2.5-0.5B|gemma-3-270m> \
+  --distill-exp <EXP_NAME> --progdistill-exp <EXP_NAME> --tag <label>
+```
+Produces `figures/<model>/pareto/pareto_balanced{5,6}_<tag>.png` (one trajectory
+per arm, points = checkpoints) plus a per-step + overall dominance verdict
+printed to stdout.
+
+### Qwen2.5-0.5B (matched GRPO kl=3e-4, lr=1e-6; sftlr differs: distill=3e-5, progdistill=1e-6)
+
+No Pareto domination either direction. Plots:
+`figures/Qwen2.5-0.5B/pareto/pareto_balanced{5,6}_sftlr1e-6.png` (and other
+`sftlr*`/`kl3e-3` tags from the in-progress sftlr=1e-5 matched sweep, tasks #48/#49).
+
+Item 4 (4096-token re-eval of progdistill→GRPO `step_1600` on n=5/n=6, to check
+for truncation at the 1024-token cap): **closed, no meaningful difference** —
+OOD numbers aren't truncation-limited. Jobs cancelled.
+
+### Gemma-3-270m, kl3e-3 (sftlr=1e-4, GRPO lr=1e-6 — fully matched, both arms 9-10/10 ckpts)
+
+No Pareto domination either direction, but a clear **cross-arm trade-off
+frontier**: progdistill→GRPO trades in-dist accuracy (0.75-0.85) for higher OOD
+n=5 accuracy (0.20-0.31); distill→GRPO sits at higher in-dist (0.84-0.89) but
+lower OOD n=5 (0.20-0.245). At step 1600, progdistill (0.848/0.300) nearly
+matches distill's in-dist (0.862) while beating it on OOD n=5 by +0.056 — close
+to dominance. n=6 shows the same direction, smaller/noisier. Plots:
+`figures/gemma-3-270m/pareto/pareto_balanced{5,6}_kl3e-3.png`.
+
+### Gemma-3-270m, kl3e-4 (sftlr=1e-4, GRPO lr=1e-6 — same arms, other KL) — IN PROGRESS
+
+Checkpoints exist for all 32 steps on both arms, but most evals were missing.
+Launched 2026-06-09 (36 eval array tasks, `kempner_requeue`, throttled to ~2
+concurrent by `QOSMaxNodePerUserLimit` — expect several hours):
+- `20707044`/`20707047`/`20707048`: distill arm, full 10-step eval ×
+  {balanced, balanced5, balanced6}
+- `20707072`: progdistill arm, missing `balanced` steps 150/450/600/1050
+- `20707083`: progdistill arm, missing `balanced6` steps 300/1050
+
+Once `.scores` coverage matches kl3e-3 (10/9/10 distill, 10/10/10 progdistill),
+run:
+```bash
+python3 scripts/plot_pareto_2d.py --model gemma-3-270m \
+  --distill-exp balanced-grpo-from-distill-lr1e-6-kl3e-4-seed1 \
+  --progdistill-exp balanced-grpo-from-progdistill-lr1e-6-kl3e-4-seed1 --tag kl3e-4
+```
