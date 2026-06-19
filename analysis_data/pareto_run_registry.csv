@@ -1,0 +1,11 @@
+model,method,sft_lr,grpo_lr,grpo_kl,seed,exp_name,n_checkpoints,checkpoint_steps,result_dir
+Qwen2.5-0.5B,distill,3e-5,1e-6,3e-4,1,balanced-distill-cross-shlokbest-n4-sft3e-5-frozen-pre-grpo-kl3e-4-lr1e-6-seed1,10,"150,300,450,600,750,900,1050,1200,1400,1600",/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-skill-comp-results/results
+Qwen2.5-0.5B,distill,1e-5,1e-6,3e-4,1,balanced-distill-sftlr1e-5-grpo-lr1e-6-kl3e-4-seed1,10,"150,300,450,600,750,900,1050,1200,1400,1600",/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-skill-comp-results/results
+Qwen2.5-0.5B,distill,1e-5,1e-6,3e-3,1,balanced-distill-sftlr1e-5-grpo-lr1e-6-kl3e-3-seed1,10,"150,300,450,600,750,900,1050,1200,1400,1600",/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-skill-comp-results/results
+Qwen2.5-0.5B,progdistill,1e-6,1e-6,3e-4,1,balanced-progdistill-sftlr1e-6-grpo-lr1e-6-kl3e-4-seed1,10,"150,300,450,600,750,900,1050,1200,1400,1600",/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-skill-comp-results/results
+Qwen2.5-0.5B,progdistill,3e-5,1e-6,3e-4,1,balanced-progdistill-sftlr3e-5-grpo-lr1e-6-kl3e-4-seed1,10,"150,300,450,600,750,900,1050,1200,1400,1600",/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-skill-comp-results/results
+Qwen2.5-0.5B,progdistill,1e-5,1e-6,3e-4,1,balanced-progdistill-sftlr1e-5-grpo-lr1e-6-kl3e-4-seed1,10,"150,300,450,600,750,900,1050,1200,1400,1600",/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-skill-comp-results/results
+gemma-3-270m,distill,1e-4,1e-6,3e-3,1,balanced-grpo-from-distill-lr1e-6-kl3e-3-seed1,10,"150,300,450,600,750,900,1050,1200,1400,1600",/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-skill-comp-results/results
+gemma-3-270m,distill,1e-4,1e-6,3e-4,1,balanced-grpo-from-distill-lr1e-6-kl3e-4-seed1,10,"150,300,450,600,750,900,1050,1200,1400,1600",/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-skill-comp-results/results
+gemma-3-270m,progdistill,1e-4,1e-6,3e-3,1,balanced-grpo-from-progdistill-lr1e-6-kl3e-3-seed1,10,"150,300,450,600,750,900,1050,1200,1400,1600",/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-skill-comp-results/results
+gemma-3-270m,progdistill,1e-4,1e-6,3e-4,1,balanced-grpo-from-progdistill-lr1e-6-kl3e-4-seed1,10,"150,300,450,600,750,900,1050,1200,1400,1600",/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-skill-comp-results/results
