@@ -31,24 +31,23 @@ index ca018fb4..c35a7bec 100644
          if self.device_mesh.get_rank() == 0:
              print(
 diff --git a/verl/utils/dataset/rl_dataset.py b/verl/utils/dataset/rl_dataset.py
-index 2c19385c..6effff11 100644
+index 2c19385c..dd7223d5 100644
 --- a/verl/utils/dataset/rl_dataset.py
 +++ b/verl/utils/dataset/rl_dataset.py
-@@ -164,7 +164,12 @@ class RLHFDataset(Dataset):
+@@ -164,7 +164,11 @@ class RLHFDataset(Dataset):
              else:
  
                  def doc2len(doc) -> int:
 -                    return len(tokenizer.apply_chat_template(doc[prompt_key], add_generation_prompt=True))
 +                    if getattr(tokenizer, "chat_template", None):
 +                        return len(tokenizer.apply_chat_template(doc[prompt_key], add_generation_prompt=True))
-+                    # Base / no-chat-template fallback (e.g. gemma-3-270m base):
-+                    # parquets are already in template_type='base' format.
-+                    text = "".join(m["content"] for m in doc[prompt_key])
-+                    return len(tokenizer.encode(text, add_special_tokens=False))
++                    # Base models with no chat template (e.g. gemma-3-270m): the parquet's
++                    # content is already in the repo's template_type='base' format.
++                    return len(tokenizer("".join(m["content"] for m in doc[prompt_key]))["input_ids"])
  
              dataframe = dataframe.filter(
                  lambda doc: doc2len(doc) <= self.max_prompt_length,
-@@ -258,7 +263,11 @@ class RLHFDataset(Dataset):
+@@ -258,7 +262,12 @@ class RLHFDataset(Dataset):
                  row_dict["multi_modal_inputs"].pop("second_per_grid_ts", None)
  
          else:
@@ -56,13 +55,14 @@ index 2c19385c..6effff11 100644
 +            if getattr(self.tokenizer, "chat_template", None):
 +                raw_prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
 +            else:
-+                # Base / no-chat-template fallback: parquet content is already final.
++                # Base models with no chat template (e.g. gemma-3-270m): the parquet's
++                # content is already in the repo's template_type='base' format.
 +                raw_prompt = "".join(m["content"] for m in messages)
              model_inputs = self.tokenizer(raw_prompt, return_tensors="pt", add_special_tokens=False)
              input_ids = model_inputs.pop("input_ids")
              attention_mask = model_inputs.pop("attention_mask")
 diff --git a/verl/utils/dataset/sft_dataset.py b/verl/utils/dataset/sft_dataset.py
-index 2aa7b203..ccee4cab 100644
+index 2aa7b203..c52f82f1 100644
 --- a/verl/utils/dataset/sft_dataset.py
 +++ b/verl/utils/dataset/sft_dataset.py
 @@ -124,7 +124,12 @@ class SFTDataset(Dataset):
@@ -73,17 +73,17 @@ index 2aa7b203..ccee4cab 100644
 +        if getattr(tokenizer, "chat_template", None):
 +            prompt_chat_str = tokenizer.apply_chat_template(prompt_chat, add_generation_prompt=True, tokenize=False)
 +        else:
-+            # Base / no-chat-template fallback (e.g. gemma-3-270m base):
-+            # parquet content is already in template_type='base' format.
-+            prompt_chat_str = "".join(m["content"] for m in prompt_chat)
++            # Base models with no chat template (e.g. gemma-3-270m): the parquet's
++            # `prompt` column is already in the repo's template_type='base' format.
++            prompt_chat_str = prompt
          response_chat_str = response + tokenizer.eos_token
  
          # tokenize
 diff --git a/verl/utils/fsdp_utils.py b/verl/utils/fsdp_utils.py
-index c2a75db7..54207900 100644
+index c2a75db7..7fbffb5b 100644
 --- a/verl/utils/fsdp_utils.py
 +++ b/verl/utils/fsdp_utils.py
-@@ -117,10 +117,10 @@ def get_fsdp_wrap_policy(module, config=None, is_lora=False):
+@@ -117,10 +117,13 @@ def get_fsdp_wrap_policy(module, config=None, is_lora=False):
          transformer_cls_to_wrap = set()
          for layer_class in fsdp_transformer_layer_cls_to_wrap:
              transformer_cls = get_module_class_from_name(module, layer_class)
@@ -92,11 +92,41 @@ index c2a75db7..54207900 100644
 -            else:
 +            if transformer_cls is not None:
                  transformer_cls_to_wrap.add(transformer_cls)
++        # Some HF model classes (e.g. Gemma3ForCausalLM) declare _no_split_modules
++        # that include vision-tower modules absent from the text-only variant.
++        # Match HF Trainer behavior: skip missing classes, raise only if NONE found.
 +        if not transformer_cls_to_wrap:
 +            raise Exception("Could not find the transformer layer class to wrap in the model.")
  
          transformer_policy = functools.partial(
              transformer_auto_wrap_policy,
+diff --git a/verl/workers/sharding_manager/fsdp_vllm.py b/verl/workers/sharding_manager/fsdp_vllm.py
+index c9b163a0..20caa915 100644
+--- a/verl/workers/sharding_manager/fsdp_vllm.py
++++ b/verl/workers/sharding_manager/fsdp_vllm.py
+@@ -340,5 +340,22 @@ class FSDPVLLMShardingManager(BaseShardingManager):
+             )
+         )
+ 
++        # gemma3 normalizer-buffer corruption workaround. vLLM's DummyModelLoader
++        # (used when load_format starts with "dummy") calls initialize_dummy_weights,
++        # which iterates state_dict — including persistent buffers. gemma3's
++        # `normalizer = sqrt(hidden_size)` buffer is registered as persistent in
++        # vLLM 0.8.5, so it gets clobbered to a random ~0 value. load_weights only
++        # writes parameters, so the buffer stays corrupted and embed_tokens(x)*~0
++        # produces token salad. Restore from config. (vLLM-side fix is to register
++        # the buffer with persistent=False; this is the verl-side defense.)
++        if not self.base_sync_done:
++            import torch as _torch
++            for _mod in model.modules():
++                _norm = getattr(_mod, "normalizer", None)
++                if isinstance(_norm, _torch.Tensor) and _norm.numel() == 1:
++                    _cfg = getattr(_mod, "config", None)
++                    if _cfg is not None and hasattr(_cfg, "hidden_size"):
++                        _norm.data.fill_(float(_cfg.hidden_size) ** 0.5)
++
+         self.base_sync_done = True
+         logger.info(f"vLLM load weights, loaded_params: {len(loaded_params) if loaded_params else -1}")
 diff --git a/verl/workers/fsdp_workers.py b/verl/workers/fsdp_workers.py
 index 067ac03f..278a0faf 100644
 --- a/verl/workers/fsdp_workers.py
@@ -123,35 +153,3 @@ index 067ac03f..278a0faf 100644
          }
          prompts.meta_info.update(meta_info)
          timing_generate = {}
-diff --git a/verl/workers/sharding_manager/fsdp_vllm.py b/verl/workers/sharding_manager/fsdp_vllm.py
-index c9b163a0..03718c57 100644
---- a/verl/workers/sharding_manager/fsdp_vllm.py
-+++ b/verl/workers/sharding_manager/fsdp_vllm.py
-@@ -18,6 +18,7 @@ import os
- import time
- from collections import OrderedDict
- 
-+import torch
- from torch.distributed.device_mesh import DeviceMesh
- from torch.distributed.fsdp.api import FullStateDictConfig, ShardedStateDictConfig, StateDictType
- from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
-@@ -340,5 +341,19 @@ class FSDPVLLMShardingManager(BaseShardingManager):
-             )
-         )
- 
-+        # Gemma-3 normalizer-buffer fix: vLLM 0.8.5's gemma3 registers
-+        # `normalizer = sqrt(hidden_size)` as a *persistent* buffer, so
-+        # load_format=dummy_dtensor clobbers it to ~0. load_weights only
-+        # writes parameters, never buffers, so the normalizer stays ~0
-+        # forever and embed * normalizer ≈ 0 → uniform-random logits.
-+        # Restore on first sync only.
-+        if not self.base_sync_done:
-+            for _mod in model.modules():
-+                _norm = getattr(_mod, "normalizer", None)
-+                if isinstance(_norm, torch.Tensor) and _norm.numel() == 1:
-+                    _cfg = getattr(_mod, "config", None)
-+                    if _cfg is not None and hasattr(_cfg, "hidden_size"):
-+                        _norm.data.fill_(float(_cfg.hidden_size) ** 0.5)
-+
-         self.base_sync_done = True
-         logger.info(f"vLLM load weights, loaded_params: {len(loaded_params) if loaded_params else -1}")

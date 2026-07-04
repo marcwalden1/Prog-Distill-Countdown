@@ -73,7 +73,10 @@ popd >/dev/null
 # ---------------------------------------------------------------------------
 # Step 2: vLLM gemma3.py — normalizer buffer must be non-persistent
 # ---------------------------------------------------------------------------
-vllm_dir=$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' 2>/dev/null || true)
+# NB: vLLM emits INFO/WARNING log lines to *stdout* on import, so take only the
+# last line (the printed path) — otherwise vllm_dir captures the log noise too
+# and the gemma3.py patch below is silently skipped on a missing "path".
+vllm_dir=$(python3 -c 'import vllm, os; print(os.path.dirname(vllm.__file__))' 2>/dev/null | tail -n1 || true)
 if [ -z "${vllm_dir}" ]; then
     echo "WARNING: vLLM not importable in this env. Skipping gemma3.py patch." >&2
     echo "         Re-run this script inside your training conda env." >&2
