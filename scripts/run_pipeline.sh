@@ -136,8 +136,22 @@ elif [ "${CLUSTER:-}" = "mit" ]; then
     _plot_extra=""
     _plot_partition=${MIT_PLOT_PARTITION:-mit_preemptable}
     _plot_account=${MIT_PLOT_ACCOUNT:-${_account}}
+elif [ -n "${CHECKPOINT_DIR:-}" ] && [ -n "${MODEL_DIR:-}" ] && [ -n "${ACCOUNT:-}" ]; then
+    # Generic fallback for any other user/cluster on SLURM: export CHECKPOINT_DIR,
+    # MODEL_DIR, and ACCOUNT. Partitions default to Kempner's kempner_h100;
+    # override any of them via TRAIN_PARTITION / EVAL_PARTITION / PLOT_PARTITION /
+    # EVAL_ACCOUNT / PLOT_ACCOUNT / PLOT_EXTRA env vars.
+    _checkpoint_dir=${CHECKPOINT_DIR}
+    _model_dir=${MODEL_DIR}
+    _account=${ACCOUNT}
+    _train_partition=${TRAIN_PARTITION:-kempner_h100}
+    _eval_partition=${EVAL_PARTITION:-kempner_h100}
+    _eval_account=${EVAL_ACCOUNT:-${ACCOUNT}}
+    _plot_extra=${PLOT_EXTRA:-}
+    _plot_partition=${PLOT_PARTITION:-${_train_partition}}
+    _plot_account=${PLOT_ACCOUNT:-${ACCOUNT}}
 else
-    echo "ERROR: Unknown user $USER. Set CHECKPOINT_DIR and MODEL_DIR explicitly." >&2
+    echo "ERROR: Unknown user $USER. Set CHECKPOINT_DIR, MODEL_DIR, and ACCOUNT explicitly." >&2
     exit 1
 fi
 # Default eval account to train account if not set per-user above.

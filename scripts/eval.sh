@@ -39,6 +39,12 @@ elif [ "${CLUSTER:-}" = "mit" ]; then
     # passed via the sbatch CLI / SBATCH_ACCOUNT, not pinned here).
     _checkpoint_dir=${HOME}/rl-checkpoints
     _account=""
+elif [ -n "${CHECKPOINT_DIR:-}" ]; then
+    # Generic fallback: export CHECKPOINT_DIR; account left empty so the strict
+    # SLURM_JOB_ACCOUNT match below is skipped (account comes from the sbatch CLI
+    # / run_pipeline.sh, as with the MIT branch).
+    _checkpoint_dir=${CHECKPOINT_DIR}
+    _account=""
 else
     echo "ERROR: Unknown user $USER. Set CHECKPOINT_DIR explicitly." >&2
     exit 1

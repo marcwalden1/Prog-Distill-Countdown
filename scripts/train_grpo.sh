@@ -59,8 +59,14 @@ elif [ "${CLUSTER:-}" = "mit" ]; then
     # MODEL_DIR / CHECKPOINT_DIR env vars (or MODEL_PATH for one-off paths).
     _model_dir=${HOME}/models
     _checkpoint_dir=${HOME}/rl-checkpoints
+elif [ -n "${MODEL_DIR:-}" ] && [ -n "${CHECKPOINT_DIR:-}" ]; then
+    # Generic fallback: any other user/cluster works by exporting MODEL_DIR +
+    # CHECKPOINT_DIR (and passing --account=... to sbatch, as run_pipeline.sh
+    # does). No per-user branch needed.
+    _model_dir=${MODEL_DIR}
+    _checkpoint_dir=${CHECKPOINT_DIR}
 else
-    echo "ERROR: Unknown user $USER. Set MODEL_DIR and CHECKPOINT_DIR explicitly." >&2
+    echo "ERROR: Unknown user $USER. Set MODEL_DIR and CHECKPOINT_DIR explicitly (and pass --account=... to sbatch)." >&2
     exit 1
 fi
 
