@@ -1,4 +1,4 @@
-"""Inventory Qwen 0.5B distill+GRPO runs used for ID/OOD plotting."""
+"""Inventory Qwen 0.5B distill/progdistill+GRPO runs used for ID/OOD plotting."""
 
 import csv
 import glob
@@ -11,12 +11,20 @@ CHECKPOINT_ROOT = (
     "rl-checkpoints/checkpoints/Qwen2.5-0.5B"
 )
 EVAL_ROOT = "results/Qwen2.5-0.5B"
+EVAL_ROOTS = [
+    EVAL_ROOT,
+    "/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/results/Qwen2.5-0.5B",
+    "/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/repo-artifacts/RL-skill-comp/results/Qwen2.5-0.5B",
+]
 STEPS = [150, 300, 450, 600, 750, 900, 1050, 1200, 1400, 1600]
 DATASETS = ["balanced", "balanced5", "balanced6"]
 RUNS = [
     {
         "exp_name": "balanced-distill-sftlr1e-5-grpo-lr1e-6-kl3e-4-seed1",
+        "method": "distill",
         "sft_lr": "1e-5",
+        "grpo_lr": "1e-6",
+        "grpo_kl": "3e-4",
         "seed": "1",
         "role": "canonical_seed1_missing_artifacts",
         "notes": (
@@ -28,38 +36,93 @@ RUNS = [
     },
     {
         "exp_name": "balanced-distill-sftlr3e-5-grpo-lr1e-6-kl3e-4-seed1",
+        "method": "distill",
         "sft_lr": "3e-5",
+        "grpo_lr": "1e-6",
+        "grpo_kl": "3e-4",
         "seed": "1",
         "role": "canonical_seed1",
         "notes": "Clean run; archived seed1-v2 renamed to this canonical name.",
     },
     {
         "exp_name": "balanced-distill-sftlr3e-6-grpo-lr1e-6-kl3e-4-seed1",
+        "method": "distill",
         "sft_lr": "3e-6",
+        "grpo_lr": "1e-6",
+        "grpo_kl": "3e-4",
         "seed": "1",
         "role": "canonical_seed1",
         "notes": "Seed1 run for lower SFT LR.",
     },
     {
         "exp_name": "balanced-distill-sftlr1e-5-grpo-lr1e-6-kl3e-4-seed21",
+        "method": "distill",
         "sft_lr": "1e-5",
+        "grpo_lr": "1e-6",
+        "grpo_kl": "3e-4",
         "seed": "21",
         "role": "comparison_seed21",
         "notes": "Complete seed21 comparison run.",
     },
     {
         "exp_name": "balanced-distill-sftlr3e-5-grpo-lr1e-6-kl3e-4-seed21",
+        "method": "distill",
         "sft_lr": "3e-5",
+        "grpo_lr": "1e-6",
+        "grpo_kl": "3e-4",
         "seed": "21",
         "role": "comparison_seed21",
         "notes": "Complete seed21 comparison run.",
     },
     {
         "exp_name": "balanced-distill-sftlr3e-6-grpo-lr1e-6-kl3e-4-seed21",
+        "method": "distill",
         "sft_lr": "3e-6",
+        "grpo_lr": "1e-6",
+        "grpo_kl": "3e-4",
         "seed": "21",
         "role": "comparison_seed21",
         "notes": "Complete seed21 comparison run.",
+    },
+    {
+        "exp_name": "balanced-progdistill-sftlr1e-5-grpo-lr1e-6-kl3e-3-seed1",
+        "method": "progdistill",
+        "sft_lr": "1e-5",
+        "grpo_lr": "1e-6",
+        "grpo_kl": "3e-3",
+        "seed": "1",
+        "role": "canonical_seed1_progdistill",
+        "notes": "Complete progdistill seed1 comparison run; evals live under holylabs results.",
+    },
+    {
+        "exp_name": "balanced-progdistill-sftlr3e-5-grpo-lr1e-6-kl3e-3-seed1",
+        "method": "progdistill",
+        "sft_lr": "3e-5",
+        "grpo_lr": "1e-6",
+        "grpo_kl": "3e-3",
+        "seed": "1",
+        "role": "canonical_seed1_progdistill",
+        "notes": "Complete progdistill seed1 comparison run; evals are available repo-local.",
+    },
+    {
+        "exp_name": "balanced-progdistill-sftlr3e-6-grpo-lr1e-6-kl3e-3-seed1",
+        "method": "progdistill",
+        "sft_lr": "3e-6",
+        "grpo_lr": "1e-6",
+        "grpo_kl": "3e-3",
+        "seed": "1",
+        "role": "canonical_seed1_progdistill",
+        "notes": "Complete progdistill seed1 comparison run; evals live under holylabs results.",
+    },
+    {
+        "exp_name": "balanced-progdistill-sftlr3e-6-grpo-lr1e-6-kl3e-4-seed1",
+        "method": "progdistill",
+        "sft_lr": "3e-6",
+        "grpo_lr": "1e-6",
+        "grpo_kl": "3e-4",
+        "seed": "1",
+        "role": "canonical_seed1_progdistill_partial_eval",
+        "notes": "Complete checkpoints, but eval coverage is missing balanced6@600 under the best holylabs eval root.",
     },
 ]
 
@@ -72,6 +135,15 @@ def find_eval_file(eval_run_dir, step, dataset, suffix):
     )
     matches = sorted(glob.glob(pattern))
     return matches[0] if matches else ""
+
+
+def find_eval_file_in_roots(exp_name, step, dataset, suffix):
+    for eval_root in EVAL_ROOTS:
+        eval_run_dir = os.path.join(eval_root, exp_name)
+        match = find_eval_file(eval_run_dir, step, dataset, suffix)
+        if match:
+            return match, eval_root
+    return "", ""
 
 
 def checkpoint_state(checkpoint_dir):
@@ -104,9 +176,9 @@ def main():
     for run in RUNS:
         exp_name = run["exp_name"]
         checkpoint_run_dir = os.path.join(CHECKPOINT_ROOT, exp_name)
-        eval_run_dir = os.path.join(EVAL_ROOT, exp_name)
         checkpoint_steps = []
         missing_eval = []
+        eval_roots_used = set()
 
         for step in STEPS:
             checkpoint_dir = os.path.join(checkpoint_run_dir, f"global_step_{step}")
@@ -115,14 +187,21 @@ def main():
                 checkpoint_steps.append(step)
 
             for dataset in DATASETS:
-                eval_json = find_eval_file(eval_run_dir, step, dataset, "")
-                score_cache = find_eval_file(eval_run_dir, step, dataset, ".scores")
+                eval_json, eval_json_root = find_eval_file_in_roots(exp_name, step, dataset, "")
+                score_cache, score_cache_root = find_eval_file_in_roots(exp_name, step, dataset, ".scores")
+                if eval_json_root:
+                    eval_roots_used.add(eval_json_root)
+                if score_cache_root:
+                    eval_roots_used.add(score_cache_root)
                 if not score_cache:
                     missing_eval.append(f"{dataset}@{step}")
                 detail_rows.append({
                     "model_name": MODEL_NAME,
+                    "method": run["method"],
                     "exp_name": exp_name,
                     "sft_lr": run["sft_lr"],
+                    "grpo_lr": run["grpo_lr"],
+                    "grpo_kl": run["grpo_kl"],
                     "seed": run["seed"],
                     "role": run["role"],
                     "checkpoint_step": step,
@@ -131,18 +210,22 @@ def main():
                     "eval_json_exists": str(bool(eval_json)).lower(),
                     "score_cache_exists": str(bool(score_cache)).lower(),
                     "checkpoint_path": checkpoint_dir,
+                    "eval_root": score_cache_root or eval_json_root,
                     "eval_json_path": eval_json,
                     "score_cache_path": score_cache,
                 })
 
         registry_rows.append({
             "model_name": MODEL_NAME,
+            "method": run["method"],
             "exp_name": exp_name,
             "sft_lr": run["sft_lr"],
+            "grpo_lr": run["grpo_lr"],
+            "grpo_kl": run["grpo_kl"],
             "seed": run["seed"],
             "role": run["role"],
             "checkpoint_root": checkpoint_run_dir,
-            "eval_root": eval_run_dir,
+            "eval_root": " ".join(sorted(eval_roots_used)),
             "checkpoint_steps_available": compress_steps(checkpoint_steps),
             "eval_score_complete": str(not missing_eval).lower(),
             "missing_eval_scores": " ".join(missing_eval),

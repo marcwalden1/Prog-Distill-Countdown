@@ -13,6 +13,12 @@ import os
 import re
 
 
+DEFAULT_RESULT_DIRS = [
+    "results",
+    "/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/results",
+    "/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/repo-artifacts/RL-skill-comp/results",
+]
+
 DATASET_META = {
     "balanced": ("id", "n=3/4"),
     "balanced5": ("ood", "n=5"),
@@ -23,10 +29,20 @@ DATASET_META = {
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-name", default="Qwen2.5-0.5B")
-    parser.add_argument("--result-dir", default="results")
+    parser.add_argument(
+        "--result-dir",
+        action="append",
+        default=None,
+        help="Result root to scan. May be passed multiple times.",
+    )
     parser.add_argument("--output", default="analysis_data/qwen05b_grpo_on_top_pareto_eval.csv")
     parser.add_argument("--grpo-lr", default="1e-6")
-    parser.add_argument("--grpo-kl", default="3e-4")
+    parser.add_argument(
+        "--grpo-kl",
+        action="append",
+        default=None,
+        help="GRPO KL value to include. Defaults to all KLs found.",
+    )
     return parser.parse_args()
 
 
@@ -85,54 +101,65 @@ def parse_score_path(path, result_dir, model_name):
 
 def main():
     args = parse_args()
-    pattern = os.path.join(args.result_dir, args.model_name, "*", "*", "*.json.scores")
-    rows = []
+    result_dirs = args.result_dir or DEFAULT_RESULT_DIRS
+    grpo_kls = set(args.grpo_kl or [])
+    rows_by_key = {}
 
-    for score_file in sorted(glob.glob(pattern)):
-        parsed = parse_score_path(score_file, args.result_dir, args.model_name)
-        if parsed is None:
-            continue
+    for result_dir in result_dirs:
+        pattern = os.path.join(result_dir, args.model_name, "*", "*", "*.json.scores")
+        for score_file in sorted(glob.glob(pattern)):
+            parsed = parse_score_path(score_file, result_dir, args.model_name)
+            if parsed is None:
+                continue
 
-        exp_name, checkpoint, checkpoint_step, dataset, stage, temp, samples, max_tokens = parsed
-        if "obsolete" in exp_name:
-            continue
-        exp = parse_exp_name(exp_name)
-        if exp["method"] not in {"distill", "progdistill"}:
-            continue
-        if exp["grpo_lr"] != args.grpo_lr or exp["grpo_kl"] != args.grpo_kl:
-            continue
+            exp_name, checkpoint, checkpoint_step, dataset, stage, temp, samples, max_tokens = parsed
+            if "obsolete" in exp_name:
+                continue
+            exp = parse_exp_name(exp_name)
+            if exp["method"] not in {"distill", "progdistill"}:
+                continue
+            if exp["grpo_lr"] != args.grpo_lr:
+                continue
+            if grpo_kls and exp["grpo_kl"] not in grpo_kls:
+                continue
 
-        with open(score_file) as f:
-            step, mean_at_1, mean_at_32 = json.load(f)
+            key = (exp_name, checkpoint, dataset)
+            if key in rows_by_key:
+                continue
 
-        split, n_label = DATASET_META[dataset]
-        rows.append({
-            "model_name": args.model_name,
-            "method": exp["method"],
-            "stage": stage,
-            "sft_lr": exp["sft_lr"],
-            "grpo_lr": exp["grpo_lr"],
-            "grpo_kl": exp["grpo_kl"],
-            "seed": exp["seed"],
-            "exp_name": exp_name,
-            "checkpoint": checkpoint,
-            "checkpoint_step": checkpoint_step or step,
-            "eval_dataset": dataset,
-            "split": split,
-            "n_label": n_label,
-            "temperature": temp,
-            "samples": samples,
-            "max_tokens": max_tokens,
-            "mean_at_1": f"{mean_at_1:.6f}",
-            "mean_at_32": f"{mean_at_32:.6f}",
-            "source_json": score_file.removesuffix(".scores"),
-            "score_file": score_file,
-        })
+            with open(score_file) as f:
+                step, mean_at_1, mean_at_32 = json.load(f)
 
+            split, n_label = DATASET_META[dataset]
+            rows_by_key[key] = {
+                "model_name": args.model_name,
+                "method": exp["method"],
+                "stage": stage,
+                "sft_lr": exp["sft_lr"],
+                "grpo_lr": exp["grpo_lr"],
+                "grpo_kl": exp["grpo_kl"],
+                "seed": exp["seed"],
+                "exp_name": exp_name,
+                "checkpoint": checkpoint,
+                "checkpoint_step": checkpoint_step or step,
+                "eval_dataset": dataset,
+                "split": split,
+                "n_label": n_label,
+                "temperature": temp,
+                "samples": samples,
+                "max_tokens": max_tokens,
+                "mean_at_1": f"{mean_at_1:.6f}",
+                "mean_at_32": f"{mean_at_32:.6f}",
+                "source_json": score_file.removesuffix(".scores"),
+                "score_file": score_file,
+            }
+
+    rows = list(rows_by_key.values())
     rows.sort(key=lambda r: (
         r["model_name"],
         r["method"],
         r["sft_lr"],
+        r["grpo_kl"],
         int(r["seed"] or 0),
         r["exp_name"],
         int(r["checkpoint_step"] or 0),

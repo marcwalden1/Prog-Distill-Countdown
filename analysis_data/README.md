@@ -18,7 +18,7 @@ Regenerate with:
 python3 scripts/export_pareto_eval_data.py
 ```
 
-`qwen05b_distill_grpo_run_registry.csv` records the Qwen 0.5B distill+GRPO
+`qwen05b_distill_grpo_run_registry.csv` records the Qwen 0.5B distill/progdistill+GRPO
 runs we currently care about, including their canonical checkpoint root and
 eval root. `qwen05b_distill_grpo_eval_inventory.csv` is the detailed
 per-step/per-dataset inventory for the same runs.
@@ -37,4 +37,5 @@ Current default scope:
 
 - model: `Qwen2.5-0.5B`
 - methods: `distill`, `progdistill`
-- post-SFT GRPO hyperparams: `grpo_lr=1e-6`, `grpo_kl=3e-4`
+- post-SFT GRPO hyperparams: `grpo_lr=1e-6`; includes both `grpo_kl=3e-4`
+  and `grpo_kl=3e-3` where those runs exist
