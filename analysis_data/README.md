@@ -39,3 +39,41 @@ Current default scope:
 - methods: `distill`, `progdistill`
 - post-SFT GRPO hyperparams: `grpo_lr=1e-6`; includes both `grpo_kl=3e-4`
   and `grpo_kl=3e-3` where those runs exist
+
+## Gemma-3-270M GRPO sweep
+
+`pareto_run_registry.csv` lists **every** Gemma-3-270M distill/progdistill+GRPO run
+present locally, not just the sftlr=1e-4 winners. SFT LR *was* searched for Gemma:
+distill over `{3e-6, 1e-5, 3e-5, 1e-4, 3e-4}`, progdistill over
+`{3e-6, 3e-5, 1e-4, 3e-4}` (GRPO lr and KL also varied). `sftlr=1e-4, grpo_lr=1e-6,
+KL=3e-3` is the *selected* best per method, not an a-priori fixed value.
+
+`gemma_grpo_sweep_eval.csv` is the per-`(run, checkpoint, dataset)` eval table for
+that full sweep, sourced from the **local** `.scores`/`.lengths` caches under
+`results/gemma-3-270m`. Columns mirror `pareto_eval_progression.csv`
+(`mean_at_1` = binary mean@1, `mean_at_32` = **shaped** mean@32 incl. the 0.1
+format floor). For binary OOD *coverage* use `gemma_pregrpo_coverage_binary.csv` /
+`gemma_pregrpo_coverage_passk.csv` instead.
+
+**Provenance caveat:** the Gemma rows in `pareto_eval_progression.csv` (the curated
+4-run canonical table) were generated from Marc's netscratch copy
+(`/n/netscratch/kdbrantley_lab/...`, no longer accessible) and differ slightly from
+the local `.scores` (different eval-sampling instance; e.g. distill kl3e-3 balanced
+step 150 = 0.800 there vs 0.828 locally). `gemma_grpo_sweep_eval.csv` is therefore a
+separate, internally-consistent local table rather than an extension of that file —
+do not mix the two in one plot.
+
+Regenerate the registry sweep rows + the sweep eval table with:
+
+```bash
+python3 scripts/refresh_gemma_grpo_sweep.py
+```
+
+## Session analysis tables (coverage hypothesis, 2026-06)
+
+- `gemma_pregrpo_coverage_binary.csv`, `gemma_pregrpo_coverage_passk.csv` — pre-GRPO
+  KD/PD SFT-student coverage across sftlr (binary mean@k and pass@k, all splits).
+- `gemma_postgrpo_kl3e-3_lr1e-6_binary.csv` — post-GRPO binary mean@k across sftlr at
+  the shared kl3e-3/lr1e-6 setting.
+- `gemma_beststable_traj_binary.csv` — binary trajectories, shared best-stable pair.
+- `gemma_bestpermethod_traj_binary.csv` — binary trajectories, each method's own best.
