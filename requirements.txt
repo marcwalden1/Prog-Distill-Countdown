@@ -16,7 +16,9 @@
 #      and Gemma runs produce garbage.
 #   3. Python 3.10 required.
 #
-# For an exact clone, prefer conda: `conda env create -f environment.yml`.
+# To BUILD the env, use scripts/setup_verl.sh — it handles the install order,
+# flashinfer's index, and flash-attn's --no-build-isolation. This file is a
+# reference lockfile of the exact resolved versions, NOT a one-shot installer.
 # ---------------------------------------------------------------------------
 accelerate==1.13.0
 aiohappyeyeballs==2.6.1
