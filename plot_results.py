@@ -95,7 +95,10 @@ def _score_item(args):
     return mean1, mean32
 
 
-MAX_PROMPTS = 1000  # cap per file to keep scoring fast
+MAX_PROMPTS = None  # None = score the full prompt set (n=5/n=6 have >1000 prompts,
+                    # and the file is ordered by pattern index so a head-slice is a
+                    # biased/easier subsample — see git history). Set to an int only
+                    # for a deliberately fast, approximate plot.
 
 
 def _extract_eval_step(path):
@@ -150,7 +153,7 @@ def _score_checkpoint(path):
         return None
     print(f"    json load: {time.time()-t_load:.1f}s  ({len(data)} prompts in file)", flush=True)
 
-    if len(data) > MAX_PROMPTS:
+    if MAX_PROMPTS is not None and len(data) > MAX_PROMPTS:
         data = data[:MAX_PROMPTS]
         print(f"    truncated to {MAX_PROMPTS} prompts", flush=True)
 
