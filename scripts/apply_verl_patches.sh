@@ -10,7 +10,7 @@
 #      (the version we develop against) if currently on a different commit.
 #   2. Applies patches/local-fixes-vs-083da9ab.patch via `git apply` —
 #      this is the combined diff of:
-#        - fsdp_sft_trainer.py (SFT scheduler horizon + seed wiring)
+#        - fsdp_sft_trainer.py (SFT scheduler horizon + seed wiring + offline-OPD loss)
 #        - fsdp_utils.py        (FSDP wrap-policy skip-missing-classes)
 #        - rl_dataset.py        (chat_template fallback, 2 sites)
 #        - sft_dataset.py       (chat_template fallback)

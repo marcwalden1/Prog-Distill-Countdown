@@ -8,8 +8,8 @@ This is the "everything in one plot" view across the several hyperparameter
 combinations that were previously plotted separately by plot_pareto_2d.py.
 
 Usage:
-    python3 scripts/plot_pareto_2d_combined.py --model Qwen2.5-0.5B
-    python3 scripts/plot_pareto_2d_combined.py --model gemma-3-270m
+    python3 scripts/plot/plot_pareto_2d_combined.py --model Qwen2.5-0.5B
+    python3 scripts/plot/plot_pareto_2d_combined.py --model gemma-3-270m
 """
 import argparse
 import os
@@ -104,7 +104,7 @@ def main():
     args = ap.parse_args()
 
     figures_dir = args.figures_dir or os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "figures", args.model, "pareto")
 
     id_curves = {}

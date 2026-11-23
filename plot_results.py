@@ -28,7 +28,7 @@ import matplotlib.pyplot as plt
 import wandb
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from gather_experiment import find_training_log, parse_step_metrics
+from gather_experiment import find_training_logs, parse_step_metrics
 from grader_utils import compute_score
 
 # ---------------------------------------------------------------------------
@@ -59,6 +59,18 @@ def parse_args():
                         default="/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models")
     parser.add_argument("--condition", default=None,
                         help="Condition tag for WandB (e.g. rl-only, distill, progdistill)")
+    parser.add_argument("--dataset_suffix", default="",
+                        help="suffix on the eval dataset dir names, e.g. '-simple' for "
+                             "prompt-variant runs evaluated on balanced-simple/balanced5-simple/...")
+    parser.add_argument("--max_tokens", type=int, default=1024,
+                        help="eval generation cap to plot. eval.py writes caps other than 1024 "
+                             "into a global_step_*/max<M>/ subdir; plot_results.sh derives this "
+                             "from --max_tokens in EVAL_EXTRA_ARGS. Non-1024 figures get a _max<M> tag.")
+    parser.add_argument("--ood_suffix", default="",
+                        help="extra suffix on the n=5/n=6 dataset names only, e.g. '-r1000' for "
+                             "the random subsets from scripts/make_eval_subsample.py "
+                             "(run_pipeline.sh OOD_SUBSAMPLE=1000). Figures and wandb keys get the "
+                             "tag too, so they never overwrite full-set ones.")
     return parser.parse_args()
 
 
@@ -67,14 +79,25 @@ def parse_args():
 # ---------------------------------------------------------------------------
 
 def load_val_reward_curve(log_dir, model_name, exp_name):
-    """Return sorted list of (step, val_reward) from the training log."""
-    log_path, _ = find_training_log(log_dir, model_name, exp_name)
-    if log_path is None:
+    """Return sorted list of (step, val_reward) from the training log(s).
+
+    A resumed run (walltime kill -> resubmit, verl resume_mode=auto) has one log
+    per SLURM job covering a disjoint step range, so all of them are merged.
+    Later jobs win on any overlapping step: after a resume from global_step_N
+    the new job's val_before_train re-validates at N with the same weights, and
+    that fresher measurement is the one to keep.
+    """
+    logs = find_training_logs(log_dir, model_name, exp_name)
+    if not logs:
         print(f"  WARNING: No training log found for {model_name}/{exp_name}")
         return []
-    with open(log_path) as f:
-        content = f.read()
-    step_metrics = parse_step_metrics(content)
+    if len(logs) > 1:
+        print(f"  Merging {len(logs)} training logs (resumed run): "
+              + ", ".join(job_id or "?" for _, job_id in logs))
+    step_metrics = {}
+    for log_path, _ in logs:
+        with open(log_path) as f:
+            step_metrics.update(parse_step_metrics(f.read()))
     return [
         (s, d["val_reward"])
         for s, d in sorted(step_metrics.items())
@@ -117,11 +140,26 @@ def _extract_eval_step(path):
     return None
 
 
+EVAL_TEMP = "0.6"   # canonical eval sampling temperature (used for globbing + filenames)
+EVAL_N = "32"       # canonical samples-per-prompt (n=32)
+EVAL_MAX_TOKENS = 1024  # set from --max_tokens in main(); mirrors eval.py's result layout
+
+
+def _cap_subdir():
+    # eval.py: caps other than 1024 live in <step>/max<M>/, 1024 stays in <step>/.
+    return "" if EVAL_MAX_TOKENS == 1024 else f"max{EVAL_MAX_TOKENS}"
+
+
 def _result_files(result_dir, model_name, exp_name, eval_dataset):
+    # Only the canonical eval config (temp 0.6, n=32) is plotted — one point per
+    # step. Matching `temp*` here would also pick up stray temp-sweep runs
+    # (e.g. temp1.0/temp2.0) and n64 files, producing multiple points per step.
+    glob_name = f"{eval_dataset}_temp{EVAL_TEMP}_n{EVAL_N}_*.json"
+    cap = _cap_subdir()
     patterns = [
-        os.path.join(result_dir, model_name, exp_name, "global_step_*", f"{eval_dataset}_temp*.json"),
-        os.path.join(result_dir, model_name, exp_name, "round_*", f"{eval_dataset}_temp*.json"),
-        os.path.join(result_dir, model_name, exp_name, "sft_final", f"{eval_dataset}_temp*.json"),
+        os.path.join(result_dir, model_name, exp_name, "global_step_*", cap, glob_name),
+        os.path.join(result_dir, model_name, exp_name, "round_*", cap, glob_name),
+        os.path.join(result_dir, model_name, exp_name, "sft_final", cap, glob_name),
     ]
     files = []
     for pattern in patterns:
@@ -289,8 +327,12 @@ def plot_val_reward(val_curve, model_name, exp_name, figures_dir):
     print(f"  Saved: {out}")
 
 
-def plot_response_length(lengths_by_dataset, figures_dir, title_prefix):
-    """Plot mean response length vs. checkpoint step for all datasets on one figure."""
+def plot_response_length(lengths_by_dataset, figures_dir, title_prefix, file_tag=""):
+    """Plot mean response length vs. checkpoint step for all datasets on one figure.
+
+    Labels may carry a subsample tag ('n=5/r1000'); colors key on the part before '/'.
+    `file_tag` ('_r1000') keeps a subsample plot from overwriting the full-set one.
+    """
     dataset_colors = {"n=3,4": COLOR_MEAN1, "n=5": COLOR_MEAN32, "n=6": COLOR_VAL}
     has_data = any(v for v in lengths_by_dataset.values())
     if not has_data:
@@ -303,14 +345,17 @@ def plot_response_length(lengths_by_dataset, figures_dir, title_prefix):
             continue
         xs, ys = zip(*lengths)
         ax.plot(xs, ys, linewidth=LINEWIDTH, marker="o", markersize=MARKERSIZE,
-                color=dataset_colors[n_label], label=n_label)
+                color=dataset_colors[n_label.split("/")[0]], label=n_label)
+        for x, y in zip(xs, ys):
+            ax.annotate(f"{y:.0f}", (x, y), textcoords="offset points", xytext=(0, 6),
+                        ha="center", va="bottom", fontsize=6, color=dataset_colors[n_label.split("/")[0]])
     ax.set_xlabel("Checkpoint step")
     ax.set_ylabel("Mean response length (tokens)")
-    ax.set_title(f"Response length — {title_prefix}")
+    ax.set_title(f"Response length (temp {EVAL_TEMP}) — {title_prefix}")
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    out = os.path.join(figures_dir, "response_length.png")
+    out = os.path.join(figures_dir, f"response_length{file_tag}_temp{EVAL_TEMP}.png")
     fig.savefig(out)
     plt.close(fig)
     print(f"  Saved: {out}", flush=True)
@@ -328,9 +373,16 @@ def plot_eval(metrics, n_label, out_path, title_prefix):
             marker="o", markersize=MARKERSIZE, label="mean@1")
     ax.plot(xs, mean32s, linewidth=LINEWIDTH, color=COLOR_MEAN32,
             marker="o", markersize=MARKERSIZE, label="mean@32")
+    # Annotate each marker with its value (mean@1 above, mean@32 below).
+    for x, y in zip(xs, mean1s):
+        ax.annotate(f"{y:.3f}", (x, y), textcoords="offset points", xytext=(0, 7),
+                    ha="center", va="bottom", fontsize=6, color=COLOR_MEAN1)
+    for x, y in zip(xs, mean32s):
+        ax.annotate(f"{y:.3f}", (x, y), textcoords="offset points", xytext=(0, -8),
+                    ha="center", va="top", fontsize=6, color=COLOR_MEAN32)
     ax.set_xlabel("Checkpoint step")
     ax.set_ylabel("Accuracy")
-    ax.set_title(f"Eval [{n_label}] — {title_prefix}")
+    ax.set_title(f"Eval [{n_label}] (temp {EVAL_TEMP}) — {title_prefix}")
     ax.set_ylim(0, None)
     ax.legend()
     ax.grid(True, alpha=0.3)
@@ -362,10 +414,19 @@ def main():
     plot_val_reward(val_curve, model_name, exp_name, figures_dir)
 
     # --- Plots 2-4: mean@1 + mean@32 per eval dataset ---
+    global EVAL_MAX_TOKENS
+    EVAL_MAX_TOKENS = args.max_tokens
+    cap_file = "" if EVAL_MAX_TOKENS == 1024 else f"_max{EVAL_MAX_TOKENS}"
+    sfx = args.dataset_suffix
+    # '-r1000' -> label 'n=5/r1000' (wandb key n5_r1000), figure eval_n5_r1000_*.png
+    ood = args.ood_suffix
+    ood_tag = ood.lstrip("-")
+    ood_label = f"/{ood_tag}" if ood_tag else ""
+    ood_file = f"_{ood_tag}" if ood_tag else ""
     dataset_configs = [
-        ("balanced",  "n=3,4", "eval_n34.png"),
-        ("balanced5", "n=5",   "eval_n5.png"),
-        ("balanced6", "n=6",   "eval_n6.png"),
+        (f"balanced{sfx}",  "n=3,4", f"eval_n34{cap_file}_temp{EVAL_TEMP}.png"),
+        (f"balanced5{sfx}{ood}", f"n=5{ood_label}", f"eval_n5{ood_file}{cap_file}_temp{EVAL_TEMP}.png"),
+        (f"balanced6{sfx}{ood}", f"n=6{ood_label}", f"eval_n6{ood_file}{cap_file}_temp{EVAL_TEMP}.png"),
     ]
 
     for dataset, n_label, fname in dataset_configs:
@@ -388,7 +449,7 @@ def main():
         n_label: compute_mean_lengths(args.result_dir, model_name, exp_name, dataset, tokenizer)
         for dataset, n_label, _ in dataset_configs
     }
-    plot_response_length(lengths_by_dataset, figures_dir, title_prefix)
+    plot_response_length(lengths_by_dataset, figures_dir, title_prefix, file_tag=ood_file + cap_file)
 
     # --- WandB: log eval metrics and val reward curve ---
     print("\n[wandb] Logging eval metrics...", flush=True)
@@ -411,6 +472,30 @@ def main():
 # WandB logging
 # ---------------------------------------------------------------------------
 
+_FAMILY_SIZE_RE = re.compile(r"^[0-9.]+[BbMm]$")     # 0.5B, 7B, 270m, 40M
+_FAMILY_DATE_RE = re.compile(r"^[0-9]{4}$")          # OLMo-2-0425-1B release date
+
+
+def model_family(name, max_segments=2):
+    """Model-family tag for a model name (or a run name that starts with one).
+
+    Keeps the leading hyphen-separated segments up to the first size-like or
+    4-digit release-date segment: Qwen2.5-0.5B -> "Qwen2.5",
+    Qwen3-0.6B-Base -> "Qwen3", OLMo-2-1124-7B-pt135B -> "OLMo-2",
+    gemma-3-270m -> "gemma-3". Mirrors _model_family() in
+    scripts/train_{grpo,sft,opd}.sh -- keep the two in sync.
+
+    Returns "" when no size/date boundary is found, or when more than
+    max_segments precede it, so hand-named runs don't get a junk family tag.
+    """
+    out = []
+    for seg in name.split("-"):
+        if _FAMILY_SIZE_RE.match(seg) or _FAMILY_DATE_RE.match(seg):
+            return "-".join(out) if 0 < len(out) <= max_segments else ""
+        out.append(seg)
+    return ""
+
+
 def wandb_tags_for_run(model_name, exp_name, condition=None, stage="eval"):
     tags = [stage]
 
@@ -428,7 +513,20 @@ def wandb_tags_for_run(model_name, exp_name, condition=None, stage="eval"):
         tags.append("grpo")
     elif stage == "eval":
         tags.append("sft")
-    tags.append(model_name.split("-")[-1])
+    # From-scratch 40M models are named Qwen2.5-40M-<shape>; keep the size in
+    # the tag (e.g. "40M-wide", "40M-deep") rather than just the shape suffix.
+    # Qwen3 base models are named Qwen3-<size>-Base; drop the -Base suffix so
+    # the tag is the size ("0.6B") rather than the literal "Base".
+    size_tag = model_name.removesuffix("-Base").split("-")[-1]
+    if "-40M-" in model_name:
+        size_tag = "40M-" + size_tag
+    tags.append(size_tag)
+    # Family tag ("Qwen2.5"/"Qwen3"/"OLMo-2"/...) -- size_tag drops it, and the
+    # family is otherwise only a prefix of the run name, which isn't filterable
+    # as a tag in the UI.
+    family_tag = model_family(model_name)
+    if family_tag:
+        tags.append(family_tag)
 
     for tag in os.environ.get("WANDB_TAGS", "").split(","):
         tag = tag.strip()
@@ -454,7 +552,7 @@ def log_to_wandb(model_name, exp_name, val_curve, metrics_by_dataset, lengths_by
     # timed out at 30s despite the env var being exported).
     init_kwargs = dict(
         project="prog_distill",
-        entity="progressive_distill",
+        entity=os.environ.get("WANDB_ENTITY", "bingbin"),
         name=f"{model_name}-{exp_name}-eval",
         id=run_id,
         resume="allow",

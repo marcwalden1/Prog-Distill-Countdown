@@ -11,6 +11,31 @@
 module load Miniforge3/26.1.0-fasrc01
 source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
 conda activate verl
+# `conda activate` sets CONDA_PREFIX but on this cluster can leave PATH pointing
+# at the base interpreter (personal miniconda from ~/.bashrc conflicts with the
+# module Miniforge), so python3 loses numpy/torch. Force the env's bin onto PATH.
+export PATH="${CONDA_PREFIX:+$CONDA_PREFIX/bin:}$PATH"
+
+# Node-local, per-job triton kernel cache. The shared ~/.triton/cache default is
+# poisoned by `cuda_utils` extensions built by other CPython versions, which raise
+# "SystemError: PY_SSIZE_T_CLEAN macro must be defined for '#' formats" on the
+# first kernel launch. See the same block in scripts/train_grpo.sh.
+export TRITON_CACHE_DIR="/tmp/triton_${SLURM_JOB_ID:-$$}"
+mkdir -p "${TRITON_CACHE_DIR}"
+
+# vLLM's torch.compile cache defaults to ~/.cache/vllm (NFS home) and is keyed
+# only by the model graph hash, so two concurrent jobs compiling the SAME model
+# write into the SAME directory. One job's rename into the cache invalidates the
+# other's open handle and it dies at engine init with
+#   OSError: [Errno 116] Stale file handle
+# in triton CompiledKernel.__init__ -> BackendCompilerFailed. Observed 2026-09-22
+# on job 47811579 (third of three Qwen3-0.6B GRPO jobs launched together; the two
+# 0.6B jobs shared graph hash 23afc4795d). This is also the likely root cause of
+# the historical "JSONDecodeError: Extra data" in the vLLM compile cache that was
+# worked around with --enforce_eager. Keep it node-local and per-job, like
+# TRITON_CACHE_DIR above; the cost is one ~1-2 min recompile per job.
+export VLLM_CACHE_ROOT="/tmp/vllm_cache_${SLURM_JOB_ID:-$$}"
+mkdir -p "${VLLM_CACHE_ROOT}"
 
 export PYTHONPATH=${HOME}/.local/lib/python3.10/site-packages:${PYTHONPATH}
 
@@ -19,6 +44,8 @@ if [ "$USER" = "mwalden" ]; then
     _checkpoint_dir=/n/netscratch/kdbrantley_lab/Lab/mwalden/rl-checkpoints
 elif [ "$USER" = "sdholakia" ]; then
     _checkpoint_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/rl-checkpoints
+elif [ "$USER" = "bingbin" ]; then
+    _checkpoint_dir=/n/netscratch/bingbin_lab/Lab/Prog-Distill-Countdown
 else
     echo "ERROR: Unknown user $USER. Set CHECKPOINT_DIR explicitly." >&2
     exit 1
@@ -26,6 +53,9 @@ fi
 
 project_dir=${PROJECT_DIR:-$PWD}
 checkpoint_dir=${CHECKPOINT_DIR:-$_checkpoint_dir}
+# Teacher checkpoints may live in another user's tree (read-only); outputs
+# still go to checkpoint_dir. Defaults to checkpoint_dir.
+teacher_checkpoint_dir=${TEACHER_CHECKPOINT_DIR:-${checkpoint_dir}}
 
 model_name=${MODEL_NAME:-Qwen2.5-1.5B}
 exp_name=${EXP_NAME:-balanced-distill-grpo-seed1}
@@ -49,7 +79,7 @@ sft_data_namespace=${SFT_DATA_NAMESPACE:-${_ns_default}}
 # Resolve teacher checkpoint path
 if [ "$teacher_step" = "final" ]; then
     # Find the highest global_step directory
-    teacher_base=${checkpoint_dir}/checkpoints/${teacher_model_name}/${teacher_exp_name}
+    teacher_base=${teacher_checkpoint_dir}/checkpoints/${teacher_model_name}/${teacher_exp_name}
     teacher_step_num=$(ls -d ${teacher_base}/global_step_* 2>/dev/null | \
         sed 's/.*global_step_//' | sort -n | tail -1)
     if [ -z "$teacher_step_num" ]; then
@@ -58,7 +88,7 @@ if [ "$teacher_step" = "final" ]; then
     fi
     teacher_ckpt_path=${teacher_base}/global_step_${teacher_step_num}
 else
-    teacher_ckpt_path=${checkpoint_dir}/checkpoints/${teacher_model_name}/${teacher_exp_name}/global_step_${teacher_step}
+    teacher_ckpt_path=${teacher_checkpoint_dir}/checkpoints/${teacher_model_name}/${teacher_exp_name}/global_step_${teacher_step}
 fi
 
 extra_args=""
@@ -109,7 +139,7 @@ else
     exit 1
 fi
 
-python3 ${project_dir}/scripts/generate_sft_data.py \
+bash ${project_dir}/scripts/with_gpu_watchdog.sh python3 ${project_dir}/scripts/generate_sft_data.py \
     --teacher_checkpoint_path ${teacher_ckpt_path} \
     --output_path ${output_path} \
     --data_path ${data_path} \

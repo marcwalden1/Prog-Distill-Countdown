@@ -2,10 +2,15 @@
 """Backfill inferred W&B tags for prog_distill runs."""
 
 import argparse
+import os
 import re
+import sys
 
 import wandb
 from wandb.errors import CommError
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from plot_results import model_family  # noqa: E402  (shared family-tag rule)
 
 
 def infer_tags(name):
@@ -32,6 +37,14 @@ def infer_tags(name):
     elif lower.startswith("qwen2.5-1.5b"):
         tags.append("1.5b")
 
+    # Model family ("Qwen2.5", "Qwen3", "OLMo-2", "gemma-3"). Run names are
+    # "{MODEL_NAME}-{EXP_NAME}", so the same rule the training scripts apply to
+    # MODEL_NAME works on the name; it returns "" for hand-named runs that don't
+    # start with a model name (e.g. "shlok-best-1point5-model").
+    family = model_family(name)
+    if family:
+        tags.append(family)
+
     return dedupe_tags(tags)
 
 
@@ -49,7 +62,7 @@ def dedupe_tags(tags):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--entity", default="progressive_distill")
+    parser.add_argument("--entity", default=os.environ.get("WANDB_ENTITY", "bingbin"))
     parser.add_argument("--project", default="prog_distill")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--quiet", action="store_true")

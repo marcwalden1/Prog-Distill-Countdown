@@ -13,7 +13,7 @@ its own BOS at encode time.
 ASSISTANT_PARTIAL_TURN = "Let me solve this step by step.\n<think>"
 
 
-def render_prompt(tokenizer, prompt, mode):
+def render_prompt(tokenizer, prompt, mode, disable_chat_template=False):
     """Return the prompt string vLLM should generate from.
 
     prompt: list of {"role","content"} dicts OR a plain string (wrapped as a
@@ -22,10 +22,15 @@ def render_prompt(tokenizer, prompt, mode):
             "sft_gen" — open a new assistant turn and append the standard
                         partial-assistant-turn suffix (matches old
                         generate_sft_data.py).
+    disable_chat_template: force the raw-concatenation path even when the
+            tokenizer ships a chat_template. Used by the scaffold-free prompt
+            variants (data/*-simple), which must see the literal parquet string
+            with no system/user wrapper. Must match the training-side setting
+            (+data.disable_chat_template in train_grpo.sh).
     """
     messages = [{"role": "user", "content": prompt}] if isinstance(prompt, str) else list(prompt)
 
-    if getattr(tokenizer, "chat_template", None):
+    if not disable_chat_template and getattr(tokenizer, "chat_template", None):
         if mode == "eval":
             return tokenizer.apply_chat_template(messages, tokenize=False, continue_final_message=True)
         if mode == "sft_gen":

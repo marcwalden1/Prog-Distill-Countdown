@@ -7,12 +7,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from grader_utils import compute_score
 
 RUNS = {
-    "0.6B": "Qwen3-0.6B-Base/balanced-simple-grpo-lr1e-6-kl3e-3-seed1",
-    "1.7B": "Qwen3-1.7B-Base/balanced-simple-grpo-lr3e-6-kl3e-3-seed1",
-    "4B":   "Qwen3-4B-Base/balanced-simple-grpo-lr3e-6-kl3e-3-seed1",
+    "0.6B": "Qwen3-0.6B-Base/balanced-simple-grpo-lr3e-6-kl3e-3-seed1",
+    "1.7B": "Qwen3-1.7B-Base/balanced-simple-grpo-lr1e-6-kl3e-3-seed1",
+    "4B":   "Qwen3-4B-Base/balanced-simple-grpo-lr1e-6-kl3e-3-seed1",
+    "0.6B-ep2": "Qwen3-0.6B-Base/balanced-simple-grpo-lr1e-6-kl3e-3-ep2-seed1",   # 2 epochs, 3266 steps
 }
+LAST_STEP = {"0.6B-ep2": 3200}   # last checkpoint on the 100-step grid; default 1600
 DS = ["balanced-simple", "balanced5-simple", "balanced6-simple"]
-STEPS = range(100, 1601, 100)
 CACHE = "analysis_data/.qwen3_size_cache"
 
 def n_correct(row):
@@ -25,7 +26,7 @@ if __name__ == "__main__":
     with Pool(8) as p:
         for name, run in RUNS.items():
             for ds in DS:
-                for step in STEPS:
+                for step in range(100, LAST_STEP.get(name, 1600) + 1, 100):
                     f = f"results/{run}/global_step_{step}/{ds}_temp0.6_n32_max1024.json"
                     c = f"{CACHE}/{run.replace('/', '__')}__{step}__{ds}.json"
                     if os.path.exists(c) and os.path.getmtime(c) > os.path.getmtime(f):

@@ -12,9 +12,9 @@ from matplotlib.patches import Circle, Rectangle
 
 STEP = int(os.environ.get("STEP", 1600))
 d = json.load(open(f"analysis_data/qwen3_venn_step{STEP}.json"))
-MODELS = [("0.6B", "0.6B (lr 1e-6)", "#2a78d6"),
-          ("1.7B", "1.7B (lr 3e-6)", "#eb6834"),
-          ("4B",   "4B (lr 3e-6)",   "#1baf7a")]
+MODELS = [("0.6B", "0.6B (lr 3e-6)", "#2a78d6"),
+          ("1.7B", "1.7B (lr 1e-6)", "#eb6834"),
+          ("4B",   "4B (lr 1e-6)",   "#1baf7a")]
 DS = [("balanced-simple", "n=3,4"), ("balanced5-simple", "n=5"), ("balanced6-simple", "n=6")]
 DEFS = [("sample #1 correct\n(mean@1)", lambda c: c[:, 0] == 1),
         ("≥16/32 samples correct\n(majority)", lambda c: c.mean(1) >= 0.5),
@@ -120,7 +120,7 @@ def euler():
     handles = [Circle((0, 0), 1, facecolor=col, alpha=0.4, edgecolor=col) for _, _, col in MODELS]
     fig.legend(handles, [nm for _, nm, _ in MODELS], loc="upper center", ncol=3, frameon=False,
                bbox_to_anchor=(0.5, 0.945), fontsize=12)
-    fig.suptitle(f"Qwen3-Base GRPO (kl=3e-3, 1 epoch, rollout n=4), step {STEP}: area-proportional Euler diagrams\n"
+    fig.suptitle(f"Qwen3-Base GRPO (0.6B lr 3e-6, 1.7B/4B lr 1e-6; kl=3e-3, 1 epoch, rollout n=4), step {STEP}: area-proportional Euler diagrams\n"
                  "circle area = #problems solved (same scale within each column); numbers = exclusive region counts "
                  "(small regions unlabeled, see UpSet)", fontsize=13, color=INK)
     plt.tight_layout(rect=[0.02, 0, 1, 0.93])
@@ -163,7 +163,7 @@ def upset():
             for s in axm.spines.values(): s.set_visible(False)
     fig.suptitle(f"Qwen3-Base GRPO (kl=3e-3, 1 epoch, rollout n=4), step {STEP}: UpSet view of per-problem correctness\n"
                  "each bar = problems solved by exactly the highlighted models (count above bar); "
-                 "0.6B lr 1e-6, 1.7B/4B lr 3e-6", fontsize=13, color=INK, y=0.97)
+                 "0.6B lr 3e-6, 1.7B/4B lr 1e-6", fontsize=13, color=INK, y=0.97)
     out = f"{OUT}/upset_qwen3_0.6B-1.7B-4B_step{STEP}.png"
     plt.savefig(out, dpi=130, facecolor="white", bbox_inches="tight"); print(out)
 

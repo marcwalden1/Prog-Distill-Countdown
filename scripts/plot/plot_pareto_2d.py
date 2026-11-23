@@ -9,7 +9,7 @@ plot_results.py / upload_evals_to_wandb.py leave next to each result JSON, so it
 is cheap and safe to run locally (it never loads the 240 MB rollout JSONs).
 
 Usage:
-    python3 scripts/plot_pareto_2d.py \
+    python3 scripts/plot/plot_pareto_2d.py \
         --result-dir /n/netscratch/kdbrantley_lab/Lab/mwalden/rl-skill-comp-results/results \
         --model Qwen2.5-0.5B \
         --distill-exp     balanced-distill-cross-shlokbest-n4-sft3e-5-frozen-pre-grpo-kl3e-4-lr1e-6-seed1 \
@@ -153,7 +153,7 @@ def main():
     args = ap.parse_args()
 
     figures_dir = args.figures_dir or os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
         "figures", args.model, "pareto")
 
     caveat = (f"distill-exp={args.distill_exp}  |  progdistill-exp={args.progdistill_exp}")

@@ -37,12 +37,28 @@ fi
 
 conda activate verl
 
+# Guard: make sure we install into the verl env, not the read-only system
+# Miniforge base. In some non-interactive / nested-conda shells `conda activate`
+# silently no-ops, leaving `pip` pointed at /n/sw/Miniforge3-*/bin (python 3.13,
+# read-only) → installs die with "OSError: [Errno 30] Read-only file system:
+# .../site-packages/...". Resolve the verl env's python explicitly and drive all
+# installs via `"$PY" -m pip`, which ignores activation state entirely.
+VERL_PREFIX="$(conda env list | awk '$NF ~ /\/envs\/verl$/ {print $NF}' | head -1)"
+if [ -z "${VERL_PREFIX}" ] || [ ! -x "${VERL_PREFIX}/bin/python" ]; then
+    echo "ERROR: could not locate the verl conda env's python." >&2
+    echo "       conda env list output:" >&2
+    conda env list >&2
+    exit 1
+fi
+PY="${VERL_PREFIX}/bin/python"
+echo "==> Installing into verl env: ${VERL_PREFIX} ($(${PY} --version 2>&1))"
+
 # Step 3: Install dependencies
 echo "==> Installing PyTorch..."
-pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+"${PY}" -m pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 
 echo "==> Installing transformers + vllm..."
-pip install transformers==4.51.1 vllm==0.8.5.post1
+"${PY}" -m pip install transformers==4.51.1 vllm==0.8.5.post1
 
 # flash-attn's build needs nvcc. Fail-soft with clear guidance if it's missing,
 # so the error is understandable rather than a cryptic mid-compile failure.
@@ -51,19 +67,19 @@ if ! command -v nvcc >/dev/null 2>&1 && [ -z "${CUDA_HOME:-}" ]; then
     echo "         Load a CUDA 12.x toolkit first, e.g.: module load cuda/12.4.1-fasrc01"
 fi
 # Bound compile parallelism so the build doesn't exhaust RAM on shared nodes.
-export MAX_JOBS=${MAX_JOBS:-4}
+export MAX_JOBS=${MAX_JOBS:-8}
 echo "==> Installing flash-attn (this compiles and takes ~15-20 min)..."
-pip3 install flash-attn==2.7.4.post1 --no-build-isolation
+"${PY}" -m pip install flash-attn==2.7.4.post1 --no-build-isolation
 
 echo "==> Installing verl in editable mode..."
 cd "${REPO_ROOT}/verl"
-pip3 install -e .
+"${PY}" -m pip install -e .
 
 echo "==> Re-pinning transformers + vllm (verl may have upgraded them)..."
-pip install transformers==4.51.1 vllm==0.8.5.post1
+"${PY}" -m pip install transformers==4.51.1 vllm==0.8.5.post1
 
 echo "==> Installing flashinfer..."
-pip install flashinfer-python==0.2.2 -i https://flashinfer.ai/whl/cu124/torch2.6/
+"${PY}" -m pip install flashinfer-python==0.2.2 -i https://flashinfer.ai/whl/cu124/torch2.6/
 
 echo ""
 echo "============================================================"

@@ -8,9 +8,9 @@ from matplotlib.patches import Circle
 
 STEP = int(os.environ.get("STEP", 1600))
 d = json.load(open(f"analysis_data/qwen3_venn_step{STEP}.json"))
-MODELS = [("0.6B", "0.6B (lr 1e-6)", "#2a78d6"),
-          ("1.7B", "1.7B (lr 3e-6)", "#eb6834"),
-          ("4B",   "4B (lr 3e-6)",   "#1baf7a")]
+MODELS = [("0.6B", "0.6B (lr 3e-6)", "#2a78d6"),
+          ("1.7B", "1.7B (lr 1e-6)", "#eb6834"),
+          ("4B",   "4B (lr 1e-6)",   "#1baf7a")]
 DS = [("balanced-simple", "n=3,4"), ("balanced5-simple", "n=5"), ("balanced6-simple", "n=6")]
 DEFS = [("sample0", "sample #1 correct\n(mean@1)", lambda c: c[:, 0] == 1),
         ("maj",     "≥16/32 samples correct\n(majority)", lambda c: c.mean(1) >= 0.5),
@@ -50,7 +50,7 @@ for i, (dkey, dlabel, fn) in enumerate(DEFS):
         ax.set_xlim(-1.75, 1.75); ax.set_ylim(-2.0, 1.75); ax.set_aspect("equal"); ax.axis("off")
         if i == 0: ax.set_title(f"{dsl}  (N={N})", fontsize=14, color=INK, pad=8)
         if j == 0: ax.text(-1.95, -0.1, dlabel, rotation=90, ha="center", va="center", fontsize=12.5, color=INK)
-fig.suptitle(f"Qwen3-Base GRPO (kl=3e-3, 1 epoch, rollout n=4) — per-problem correctness at step {STEP}\n"
+fig.suptitle(f"Qwen3-Base GRPO (0.6B lr 3e-6, 1.7B/4B lr 1e-6; kl=3e-3, 1 epoch, rollout n=4) — per-problem correctness at step {STEP}\n"
              "eval: temp 0.6, 32 samples, max 1024 tokens; region labels = #problems / % of test set",
              fontsize=14, color=INK)
 plt.tight_layout(rect=[0.02, 0, 1, 0.95])

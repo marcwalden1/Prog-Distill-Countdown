@@ -223,9 +223,9 @@ elif [ "$DISTILL_MODE" = "progdistill" ]; then
     sft_data_base=${checkpoint_dir}/sft-data/${MODEL_NAME}/${EXP_NAME}
     base_model_path=${model_dir}/${MODEL_NAME}
 
-    # Teacher checkpoints: the 10 steps at which eval.sh evaluates
-    # (array indices 3,6,9,12,15,18,21,24,28,32 × 50 = these steps)
-    teacher_steps=(150 300)
+    # Two early teacher checkpoints, on the save_freq=100 grid (see the
+    # TEACHER_STEPS notes in run_pipeline.sh).
+    read -r -a teacher_steps <<< "${TEACHER_STEPS:-100 200}"
     T=${PROGDISTILL_STEPS_PER_ROUND}
 
     prev_sft_jid=""
@@ -346,7 +346,7 @@ if [ -n "${FINAL_JID:-}" ]; then
     PLOT_JID=$(sbatch --parsable \
         --partition=$_plot_partition --account=$_plot_account $_plot_extra \
         --dependency=afterok:${EVAL_JID1}:${EVAL_JID2}:${EVAL_JID3} \
-        scripts/plot_results.sh)
+        scripts/plot/plot_results.sh)
     echo "Plot:   job $PLOT_JID"
 fi
 

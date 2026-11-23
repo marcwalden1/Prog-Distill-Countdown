@@ -46,7 +46,7 @@ submit_chain() {
         EXP_NAME="$exp" \
         sbatch --parsable --account=$ACCT --partition=kempner_requeue \
         --gres=gpu:nvidia_h100_80gb_hbm3:1 \
-        --dependency=afterok:$EVAL_JIDS scripts/plot_results.sh)
+        --dependency=afterok:$EVAL_JIDS scripts/plot/plot_results.sh)
     echo "    PLOT_JID=$PJID"
 }
 

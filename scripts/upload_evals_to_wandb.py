@@ -49,7 +49,7 @@ def main():
     ap.add_argument("--model", required=True)
     ap.add_argument("--exp", required=True)
     ap.add_argument("--project", default="prog_distill")
-    ap.add_argument("--entity", default=os.environ.get("WANDB_ENTITY", "progressive_distill"))
+    ap.add_argument("--entity", default=os.environ.get("WANDB_ENTITY", "bingbin"))
     ap.add_argument("--tags", nargs="*", default=["evals", "grpo"])
     ap.add_argument("--wandb-dir", default=None,
                     help="WANDB_DIR for the offline run. Defaults to /tmp/wandb_evals_<exp>_<pid>. "

@@ -94,7 +94,7 @@ def dominance(ood, distill_xy, prog_arms):
 
 def main():
     api = wandb.Api()
-    figdir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    figdir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                           "figures", "Qwen2.5-0.5B", "pareto_wandb")
     raw = {label: (load_arm(api, rid), color, is_d)
            for label, (rid, color, is_d) in ARMS.items()}

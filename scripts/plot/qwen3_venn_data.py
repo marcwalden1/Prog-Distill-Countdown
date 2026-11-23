@@ -5,9 +5,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from grader_utils import compute_score
 
 RUNS = {
-    "0.6B": "Qwen3-0.6B-Base/balanced-simple-grpo-lr1e-6-kl3e-3-seed1",
-    "1.7B": "Qwen3-1.7B-Base/balanced-simple-grpo-lr3e-6-kl3e-3-seed1",
-    "4B":   "Qwen3-4B-Base/balanced-simple-grpo-lr3e-6-kl3e-3-seed1",
+    "0.6B": "Qwen3-0.6B-Base/balanced-simple-grpo-lr3e-6-kl3e-3-seed1",
+    "1.7B": "Qwen3-1.7B-Base/balanced-simple-grpo-lr1e-6-kl3e-3-seed1",
+    "4B":   "Qwen3-4B-Base/balanced-simple-grpo-lr1e-6-kl3e-3-seed1",
 }
 DS = ["balanced-simple", "balanced5-simple", "balanced6-simple"]
 STEP = int(os.environ.get("STEP", 1600))

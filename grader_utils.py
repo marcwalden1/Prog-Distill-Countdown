@@ -44,6 +44,17 @@ def evaluate_equation(equation_str):
         if not re.match(allowed_pattern, equation_str):
             raise ValueError("Invalid characters in equation.")
 
+        # '**' slips through the character filter above (both chars are in the
+        # allowed set) but exponentiation is not one of the four permitted
+        # operations, and eval() on a right-associative tower like
+        # `15 ** 15 ** 45` tries to materialize an astronomically large int:
+        # the call never returns and host RAM grows without bound. This wedged
+        # GRPO run balanced-grpo-dynbsz-n8-lr3e-6-kl3e-3-ep2-seed1 twice around
+        # step 80 (job 37040294 reached 400 GB RSS, then OOM-kill) once the
+        # policy started emitting '**' inside <answer>.
+        if "**" in equation_str:
+            raise ValueError("Exponentiation is not an allowed operation.")
+
         # Evaluate the equation with restricted globals and locals
         result = eval(equation_str, {"__builtins__": None}, {})
         return result
@@ -51,24 +62,48 @@ def evaluate_equation(equation_str):
         return None
 
 
-def compute_score(data_source, solution_str, ground_truth, extra_info=None, method='strict', format_score=0.1, score=1., verbose=True):
+def compute_score(data_source, solution_str, ground_truth, extra_info=None, method='strict', format_score=0.1, score=1., verbose=True, trailing_penalty=0.0):
     """The scoring function for countdown task.
-    
+
     Args:
         solution_str: the solution text
         ground_truth: dictionary containing target number and available numbers
         method: the method to extract the solution
         format_score: the score for correct format but wrong answer
         score: the score for the correct answer
+        trailing_penalty: reward deducted per 1000 characters of content after
+            the final </answer> tag (floored at 0.0). Default 0.0 = disabled,
+            so eval scoring (plot_results.py etc.) is unchanged; training
+            enables it via custom_reward_function.reward_kwargs
+            (TRAILING_PENALTY env var in train_grpo.sh/train_ppo.sh).
+            Motivation: the answer is extracted from the *last* <answer> tag,
+            so junk emitted after a correct answer (e.g. repeated </think>
+            spam up to the length cap) is otherwise reward-neutral and gets
+            reinforced by token-mean GRPO on positive-advantage rollouts.
     """
     ## EDITED
     target = ground_truth
     numbers = extra_info.get("numbers", [])
     ## EDITED
-    
+
     equation = extract_solution(solution_str=solution_str)
     do_print = random.randint(1, 64) == 1 and verbose
-    
+
+    def apply_trailing_penalty(base_score):
+        """Deduct trailing_penalty per 1000 chars of junk after the final </answer>."""
+        if trailing_penalty <= 0:
+            return base_score
+        tag_pos = solution_str.rfind("</answer>")
+        if tag_pos < 0:
+            return base_score
+        # strip() so a bare newline/EOS whitespace tail costs nothing
+        tail_len = len(solution_str[tag_pos + len("</answer>"):].strip())
+        penalty = trailing_penalty * tail_len / 1000.0
+        final_score = max(base_score - penalty, 0.0)
+        if do_print and penalty > 0:
+            print(f"Trailing junk: {tail_len} chars after </answer>, penalty {penalty:.3f}, score {base_score} -> {final_score:.3f}")
+        return final_score
+
     if do_print:
         print(f"--------------------------------")
         print(f"Target: {target} | Numbers: {numbers}")
@@ -79,30 +114,30 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None, meth
         if do_print:
             print(f"No equation found")
         return 0
-    
+
     # Validate equation uses correct numbers
     if not validate_equation(equation, numbers):
         if do_print:
             print(f"Invalid equation")
-        return format_score
-        
+        return apply_trailing_penalty(format_score)
+
     # Evaluate equation
     try:
         result = evaluate_equation(equation)
         if result is None:
             if do_print:
                 print(f"Could not evaluate equation")
-            return format_score
-            
+            return apply_trailing_penalty(format_score)
+
         if abs(result - target) < 1e-5:  # Account for floating point precision
             if do_print:
                 print(f"Correct equation: {equation} = {result}")
-            return score
+            return apply_trailing_penalty(score)
         else:
             if do_print:
                 print(f"Wrong result: equation = {result}, target = {target}")
-            return format_score
+            return apply_trailing_penalty(format_score)
     except:
         if do_print:
             print(f"Error evaluating equation")
-        return format_score 
+        return apply_trailing_penalty(format_score) 

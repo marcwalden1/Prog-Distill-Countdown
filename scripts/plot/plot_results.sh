@@ -15,9 +15,13 @@ else
     source /n/sw/Miniforge3-26.1.0-0/etc/profile.d/conda.sh
     conda activate verl
 fi
+# `conda activate` sets CONDA_PREFIX but on this cluster can leave PATH pointing
+# at the base interpreter (personal miniconda from ~/.bashrc conflicts with the
+# module Miniforge), so python3 loses numpy/torch. Force the env's bin onto PATH.
+export PATH="${CONDA_PREFIX:+$CONDA_PREFIX/bin:}$PATH"
 
 export WANDB_MODE="${WANDB_MODE:-online}"
-export WANDB_ENTITY="progressive_distill"
+export WANDB_ENTITY="${WANDB_ENTITY:-bingbin}"
 # Put wandb-core's IPC port-file on local /tmp — NFS-backed paths bust the
 # 30s service-startup timeout (ServicePollForTokenError). Matches train_grpo.sh.
 export WANDB_DIR="/tmp/wandb_${SLURM_JOB_ID:-$$}"
@@ -30,6 +34,8 @@ if [ "$USER" = "mwalden" ]; then
     _model_dir=/n/holylabs/LABS/kdbrantley_lab/Lab/mwalden/models
 elif [ "$USER" = "sdholakia" ]; then
     _model_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/sdholakia/models
+elif [ "$USER" = "bingbin" ]; then
+    _model_dir=/n/holylabs/LABS/kempner_bingbin_lab/Lab/bingbin/models
 elif [ "${CLUSTER:-}" = "mit" ]; then
     _model_dir=${HOME}/models
 else
@@ -54,6 +60,17 @@ fi
 echo "W&B mode:   ${WANDB_MODE}"
 echo "W&B entity: ${WANDB_ENTITY}"
 
+# Eval-set dir suffix, derived from DATA_SOURCE (see run_pipeline.sh):
+# DATA_SOURCE=balanced-simple -> '-simple', unset/balanced -> ''.
+dataset_suffix=${DATA_SOURCE:-balanced}
+dataset_suffix=${dataset_suffix#balanced}
+
+# Eval generation cap: eval.py files non-1024 caps under <step>/max<M>/, so the
+# plotter must know it. It is defined by --max_tokens in EVAL_EXTRA_ARGS (inherited
+# from run_pipeline.sh's environment); absent = eval.py's default 1024.
+eval_max_tokens=$(echo " ${EVAL_EXTRA_ARGS:-} " | grep -oE -- "--max_tokens[= ]+[0-9]+" | grep -oE "[0-9]+$")
+eval_max_tokens=${eval_max_tokens:-1024}
+
 python3 ${project_dir}/plot_results.py \
     --model_name     ${model_name} \
     --exp_name       ${exp_name} \
@@ -61,4 +78,7 @@ python3 ${project_dir}/plot_results.py \
     --log_dir        ${log_dir} \
     --figures_dir    ${figures_dir} \
     --model_base_dir ${MODEL_DIR:-$_model_dir} \
+    --dataset_suffix="${dataset_suffix}" \
+    --max_tokens=${eval_max_tokens} \
+    ${OOD_SUBSAMPLE:+--ood_suffix=-r${OOD_SUBSAMPLE}} \
     ${condition_arg}

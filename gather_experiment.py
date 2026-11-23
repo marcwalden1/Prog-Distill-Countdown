@@ -73,6 +73,82 @@ def find_training_log(log_dir, model_name, exp_name):
     return None, None
 
 
+# verl's ray_trainer._load_checkpoint() prints exactly one of these at startup.
+# "Setting global step to N" means this job resumed from global_step_N; its
+# absence (or "Training from scratch") means it began at step 0.
+_RESUME_RE = re.compile(r"Setting global step to (\d+)")
+# The marker sits ~120 KB in, after worker init. Bound the read so this never
+# pulls a >100 MB training log into memory.
+_RESUME_SCAN_BYTES = 8 << 20
+
+
+def _resumed_from_step(path):
+    """Step this training job resumed from; 0 if it started from scratch."""
+    try:
+        with open(path) as f:
+            head = f.read(_RESUME_SCAN_BYTES)
+    except Exception:
+        return 0
+    m = _RESUME_RE.search(head)
+    return int(m.group(1)) if m else 0
+
+
+def find_training_logs(log_dir, model_name, exp_name):
+    """The training logs making up this experiment's latest run, oldest first.
+
+    A run killed on walltime and resubmitted (verl resume_mode=auto) has one log
+    per SLURM job, each covering a disjoint step range; find_training_log()
+    returns only the first, which truncates the curve where the first job died.
+
+    Walks back from the newest log along the resume chain and stops at the job
+    that started from scratch. That boundary matters: an experiment name is
+    often reused by an earlier *abandoned* attempt, whose steps are a different
+    training trajectory, not an earlier segment of this one. Returns a list of
+    (path, job_id) sorted by job id; [] if nothing matches.
+    """
+    def job_id_of(path):
+        m = re.search(r"train_grpo\.sh-(\d+)-", os.path.basename(path))
+        return m.group(1) if m else None
+
+    candidates = sorted(glob.glob(os.path.join(log_dir, "train_grpo.sh-*.out")))
+
+    # Pass 1: config-header match. Cheap — reads 4 KB per log.
+    hits = []
+    for path in candidates:
+        try:
+            with open(path) as f:
+                head = strip_ansi(f.read(4096))
+        except Exception:
+            continue
+        if (f"Model:            {model_name}" in head
+                and f"Exp name:         {exp_name}" in head):
+            hits.append(path)
+
+    # Pass 2: only if no log has a header (pre-header logs). Reads whole files,
+    # which can be >100 MB each, so never do this when pass 1 found anything.
+    if not hits:
+        for path in candidates:
+            try:
+                with open(path) as f:
+                    content = f.read()
+            except Exception:
+                continue
+            if model_name in content and exp_name in content:
+                hits.append(path)
+
+    hits = sorted(hits, key=lambda p: int(job_id_of(p) or 0))
+
+    # Keep the newest job, plus each older one it chains back to via a resume.
+    chain = []
+    for path in reversed(hits):
+        chain.append(path)
+        if _resumed_from_step(path) == 0:
+            break  # this job started from scratch: chain root
+    chain.reverse()
+
+    return [(path, job_id_of(path)) for path in chain]
+
+
 def parse_config_header(content):
     """Extract fields from the EXPERIMENT CONFIG header block.
     Only parses within the ==== EXPERIMENT CONFIG ==== block to avoid
@@ -141,6 +217,19 @@ def parse_step_metrics(content):
     Each step is logged on a single line (possibly very long) with format:
       (TaskRunner pid=N) step:S - key:value - key:value ...
     Lines also contain ANSI escape codes which are stripped first.
+
+    The trailing " - " in the step regex is load-bearing, do not drop it. The
+    same line carries metric KEYS ending in "step", and they are values in
+    seconds, not step numbers:
+
+        ... - timing_s/step:338.23 - perf/time_per_step:264.45 - training/global_step:1600 - ...
+
+    "\bstep:(\d+)" alone matches timing_s/step: (the "/" is a word boundary) and
+    yields 338; without \b, time_per_step: and global_step: match too. Requiring
+    " - " pins the match to the real step field. This is also why you cannot read
+    a run's last step with `grep -oE "step:[0-9]+" <log> | tail -1` — it returns
+    a truncated wall-clock duration that looks like a plausible step number. Use
+    this function.
     """
     steps = {}
     ansi_free = strip_ansi(content)

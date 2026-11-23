@@ -1,8 +1,186 @@
+diff --git a/verl/trainer/config/actor/actor.yaml b/verl/trainer/config/actor/actor.yaml
+index 1b208b10..6ae0a84c 100644
+--- a/verl/trainer/config/actor/actor.yaml
++++ b/verl/trainer/config/actor/actor.yaml
+@@ -122,6 +122,9 @@ optim:
+   # Weight decay
+   weight_decay: 0.01
+ 
++  # AdamW (beta1, beta2)
++  betas: [0.9, 0.999]
++
+   # Prioritized. None, 0 or Negative values mean delegating to lr_warmup_steps_ratio.
+   lr_warmup_steps: -1
+ 
+diff --git a/verl/trainer/config/sft_trainer.yaml b/verl/trainer/config/sft_trainer.yaml
+index bfff1c30..b95aeee4 100644
+--- a/verl/trainer/config/sft_trainer.yaml
++++ b/verl/trainer/config/sft_trainer.yaml
+@@ -60,6 +60,7 @@ trainer:
+   seed: 1
+   save_freq: -1
+   test_freq: -1
++  logging_freq: 50  # log train metrics to console/wandb every N steps (<=1 = every step; last step always logged)
+   nnodes: 1
+   n_gpus_per_node: 8
+   max_ckpt_to_keep: null  # Maximum number of checkpoints to keep, set to null to keep all
 diff --git a/verl/trainer/fsdp_sft_trainer.py b/verl/trainer/fsdp_sft_trainer.py
-index ca018fb4..c35a7bec 100644
+index ca018fb4..9df56bb2 100644
 --- a/verl/trainer/fsdp_sft_trainer.py
 +++ b/verl/trainer/fsdp_sft_trainer.py
-@@ -171,8 +171,10 @@ class FSDPSFTTrainer:
+@@ -82,6 +82,132 @@ logger = logging.getLogger(__file__)
+ logger.setLevel(os.getenv("VERL_SFT_LOGGING_LEVEL", "WARN"))
+ 
+ 
++_MEM_PROBE = os.environ.get("VERL_MEM_PROBE", "0") == "1"
++
++
++def _mem_probe(tag, dump=False):
++    """Debug only (VERL_MEM_PROBE=1): per-rank CUDA allocated/peak, optionally the
++    largest live CUDA tensors reachable from Python (gc)."""
++    if not _MEM_PROBE:
++        return
++    import gc
++    r = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
++    g = 1 << 30
++    print(f"[memprobe r{r}] {tag}: alloc {torch.cuda.memory_allocated() / g:.2f} GiB, "
++          f"peak {torch.cuda.max_memory_allocated() / g:.2f} GiB, "
++          f"reserved {torch.cuda.memory_reserved() / g:.2f} GiB", flush=True)
++    torch.cuda.reset_peak_memory_stats()
++    if dump and r == 0:
++        seen, rows = set(), []
++        for o in gc.get_objects():
++            try:
++                if torch.is_tensor(o) and o.is_cuda:
++                    st = o.untyped_storage()
++                    key = st.data_ptr()
++                    if key in seen:
++                        continue
++                    seen.add(key)
++                    rows.append((st.nbytes(), tuple(o.shape), str(o.dtype), o.requires_grad, type(o).__name__))
++            except Exception:
++                pass
++        rows.sort(reverse=True)
++        tot = sum(x[0] for x in rows)
++        print(f"[memprobe r{r}] {tag}: {len(rows)} gc-visible CUDA storages, {tot / g:.2f} GiB total; top 15:", flush=True)
++        for nb, sh, dt, rg, ty in rows[:15]:
++            print(f"    {nb / g:8.3f} GiB  {ty} {sh} {dt} requires_grad={rg}", flush=True)
++
++
++def _mem_probe_referrers(tag):
++    """Debug only (VERL_MEM_PROBE=1): for each live full-vocab logits tensor, print the
++    chain of Python objects referring to it, then what the cycle collector frees."""
++    if not _MEM_PROBE or torch.distributed.get_rank() != 0:
++        return
++    import gc
++    import types
++
++    def desc(o):
++        t = type(o)
++        name = f"{t.__module__}.{t.__qualname__}"
++        if isinstance(o, dict):
++            return f"{name} keys={list(o.keys())[:8]}"
++        if isinstance(o, (list, tuple)):
++            return f"{name} len={len(o)}"
++        if isinstance(o, types.FrameType):
++            return f"frame {o.f_code.co_name} {o.f_code.co_filename}:{o.f_lineno}"
++        if isinstance(o, types.CellType):
++            return "cell"
++        if isinstance(o, types.FunctionType):
++            return f"function {o.__qualname__}"
++        if torch.is_tensor(o):
++            return f"Tensor {tuple(o.shape)}"
++        return name
++
++    vocab_big = [o for o in gc.get_objects()
++                 if torch.is_tensor(o) and o.is_cuda and o.dim() == 3 and o.shape[-1] > 100000]
++    print(f"[memprobe-ref] {tag}: {len(vocab_big)} live full-vocab tensors", flush=True)
++    skip = {id(vocab_big)}
++    for i, t in enumerate(vocab_big):
++        print(f"[memprobe-ref]  tensor {i}: {tuple(t.shape)} {t.dtype}", flush=True)
++        frontier, seen = [(t, 0)], {id(t)}
++        while frontier:
++            o, d = frontier.pop(0)
++            if d >= 5:
++                continue
++            for r in gc.get_referrers(o):
++                if id(r) in seen or id(r) in skip or r is frontier or isinstance(r, types.FrameType) and r.f_code.co_name == "_mem_probe_referrers":
++                    continue
++                seen.add(id(r))
++                print(f"[memprobe-ref]    {'  ' * d}<- {desc(r)}", flush=True)
++                frontier.append((r, d + 1))
++                if len(seen) > 60:
++                    frontier = []
++                    break
++    del vocab_big
++    gc.set_debug(gc.DEBUG_SAVEALL)
++    n = gc.collect()
++    from collections import Counter
++    c = Counter(desc(o).split(" keys=")[0].split(" len=")[0] for o in gc.garbage)
++    print(f"[memprobe-ref] gc.collect found {n} unreachable objects; types: {c.most_common(25)}", flush=True)
++    gc.garbage.clear()
++    gc.set_debug(0)
++
++
++def kd_token_loss(logits, kd_ids, kd_logprobs, kd_mask, labels, chunk=8):
++    """Bucketed forward KL(teacher || student) per position (local patch 8, data.kd).
++
++    Buckets per position: each active slot of kd_ids (teacher top-k, plus the
++    sampled token when outside the top-k; see DistillKDDataset) is its own
++    bucket, and every other vocab token is lumped into one tail bucket.
++        teacher: p_b = exp(kd_logprobs), p_tail = max(0, 1 - sum_b p_b)
++        student: q_b = softmax(logits)[id_b], q_tail = 1 - sum_b q_b
++        KL = sum_b p_b (log p_b - log q_b) + p_tail (log p_tail - log q_tail)
++    The p log p terms carry no gradient but make the value an actual KL (>= 0).
++
++    logits (B, T, V) any float dtype; kd_* (B, T, K); labels (B, T).
++    Returns (kl, ce), each (B, T) fp32; ce = -log q(label) (detached), so it is
++    directly comparable with the NTP arm's loss. Upcasts to fp32 in batch
++    chunks so the transient exp() buffer is chunk-sized.
++    """
++    kls, ces = [], []
++    for s in range(0, logits.shape[0], chunk):
++        lg = logits[s:s + chunk].float()
++        lse = torch.logsumexp(lg, dim=-1, keepdim=True)
++        m = kd_mask[s:s + chunk]
++        s_lp = (torch.gather(lg, -1, kd_ids[s:s + chunk]) - lse).masked_fill(~m, 0.0)
++        # log sum_b q_b; masked slots -> large negative finite (an all-masked row
++        # must not produce -inf, whose logsumexp gradient is NaN)
++        s_named = torch.logsumexp(s_lp.masked_fill(~m, -1e30), dim=-1)
++        # log q_tail = log(1 - exp(s_named)); clamp keeps it finite (>= ~ -13.8)
++        s_tail = torch.log(-torch.expm1(s_named.clamp(max=-1e-6)))
++        t_p = torch.exp(kd_logprobs[s:s + chunk].float()) * m
++        t_tail = (1.0 - t_p.sum(-1)).clamp(min=0.0)
++        kl = (torch.xlogy(t_p, t_p) - t_p * s_lp).sum(-1) + torch.xlogy(t_tail, t_tail) - t_tail * s_tail
++        kls.append(kl)
++        with torch.no_grad():
++            ces.append(lse.squeeze(-1) - torch.gather(lg, -1, labels[s:s + chunk, :, None]).squeeze(-1))
++    return torch.cat(kls), torch.cat(ces)
++
++
+ def extract_step(path):
+     match = re.search(r"global_step_(\d+)", path)
+     if match:
+@@ -100,6 +226,18 @@ class FSDPSFTTrainer:
+         val_dataset: Dataset,
+     ):
+         self.config = config
++        # Loss-branch flags, read ONCE here. DictConfig.get() on a missing key raises
++        # and catches a ConfigKeyError inside omegaconf; the caught exception's
++        # traceback forms a reference cycle whose frames' f_back chain pins the CALLER's
++        # frame. Called per micro-batch inside _compute_loss_and_backward, that pinned
++        # the frame's locals -- incl. the full-vocab logits (64x512x151936 bf16 = 9.27
++        # GiB) -- until Python's cyclic GC happened to run, so several stale logits
++        # piled up and OOMed the final validation pass (memory probes 59564092 /
++        # 59566335, 2026-11-10).
++        self._use_opd = bool(config.data.get("opd", False))
++        self._use_kd = bool(config.data.get("kd", False))
++        self._kd_chunk = int(config.data.get("kd_chunk", 8))
++        self._opd_clip = float(config.data.get("opd_clip", 10.0))
+         self.device_mesh = device_mesh
+         self.ulysses_device_mesh = ulysses_device_mesh
+         self.sharding_manager = FSDPUlyssesShardingManager(self.ulysses_device_mesh)
+@@ -171,8 +309,10 @@ class FSDPSFTTrainer:
          # Set pin_memory_device when pin_memory is enabled.
          device_name = get_device_name()
  
@@ -14,7 +192,21 @@ index ca018fb4..c35a7bec 100644
          )
          self.train_dataloader = StatefulDataLoader(
              dataset=self.train_dataset,
-@@ -330,7 +332,14 @@ class FSDPSFTTrainer:
+@@ -184,8 +324,12 @@ class FSDPSFTTrainer:
+             pin_memory_device=device_name,
+         )
+ 
++        # Shuffle validation (seeded, so deterministic across runs): when
++        # trainer.max_val_batches caps the pass, the kept batches must be a
++        # random subsample, not the head of the first val parquet in file
++        # order. Harmless without a cap — val/loss is an order-free mean.
+         self.val_sampler = DistributedSampler(
+-            self.val_dataset, shuffle=False, num_replicas=world_size, rank=rank, drop_last=True
++            self.val_dataset, shuffle=True, num_replicas=world_size, rank=rank, drop_last=True, seed=seed
+         )
+         self.val_dataloader = StatefulDataLoader(
+             dataset=self.val_dataset,
+@@ -330,7 +474,14 @@ class FSDPSFTTrainer:
          log_gpu_memory_usage("After initialize optimizer", logger=logger)
  
          self.steps_per_epoch = len(self.train_dataloader)
@@ -30,11 +222,247 @@ index ca018fb4..c35a7bec 100644
  
          if self.device_mesh.get_rank() == 0:
              print(
+@@ -340,7 +491,29 @@ class FSDPSFTTrainer:
+ 
+         num_warmup_steps = int(self.total_steps * self.config.optim.warmup_steps_ratio)
+ 
+-        if not hasattr(self.config.optim, "lr_scheduler") or self.config.optim.lr_scheduler == "cosine":
++        # Local patch 9: optional cosine floor. optim.min_lr_ratio=r -> linear warmup
++        # 0 -> peak, then cosine peak -> r*peak at total_steps. (verl's
++        # get_cosine_schedule_with_warmup(min_lr_ratio=r) would start the warmup at r*peak,
++        # so it is not used for this.) r=0 / unset keeps the stock schedule exactly.
++        min_lr_ratio = float(self.config.optim.get("min_lr_ratio", 0.0) or 0.0)
++        sched = self.config.optim.get("lr_scheduler", "cosine")
++        if sched == "cosine" and min_lr_ratio > 0:
++            import math
++
++            from torch.optim.lr_scheduler import LambdaLR
++
++            total, warm = self.total_steps, num_warmup_steps
++
++            def _lr_lambda(step):
++                if step < warm:
++                    return step / max(1, warm)
++                progress = min(1.0, (step - warm) / max(1, total - warm))
++                return min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (1.0 + math.cos(math.pi * progress))
++
++            self.lr_scheduler = LambdaLR(self.optimizer, _lr_lambda)
++            if self.device_mesh.get_rank() == 0:
++                print(f"cosine LR: warmup {warm} steps from 0, then decay to {min_lr_ratio} x peak at step {total}")
++        elif not hasattr(self.config.optim, "lr_scheduler") or self.config.optim.lr_scheduler == "cosine":
+             self.lr_scheduler = get_cosine_schedule_with_warmup(
+                 optimizer=self.optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=self.total_steps
+             )
+@@ -348,6 +521,13 @@ class FSDPSFTTrainer:
+             self.lr_scheduler = get_wsd_schedule_with_warmup(
+                 optimizer=self.optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=self.total_steps
+             )
++        elif self.config.optim.lr_scheduler == "constant":
++            # Local patch 7: constant LR after (optional) linear warmup.
++            from transformers import get_constant_schedule_with_warmup
++
++            self.lr_scheduler = get_constant_schedule_with_warmup(
++                optimizer=self.optimizer, num_warmup_steps=num_warmup_steps
++            )
+         else:
+             raise ValueError(f"Unknown lr scheduler: {self.config.optim.lr_scheduler}")
+ 
+@@ -362,6 +542,15 @@ class FSDPSFTTrainer:
+         loss_mask = batch.pop("loss_mask")[:, :-1].reshape(-1).to(self.device_name)
+         loss_fct = nn.CrossEntropyLoss(reduction="none")
+ 
++        # Offline on-policy distillation (local patch 6): when data.opd is set,
++        # the batch carries per-token teacher logprobs (see OPDDataset in the
++        # repo root) and the loss becomes advantage-weighted CE below.
++        use_opd = self._use_opd
++        # Logit distillation (local patch 8): data.kd=True, batch from DistillKDDataset.
++        use_kd = self._use_kd
++        if use_kd and (use_opd or use_sp):
++            raise NotImplementedError("data.kd=True is not supported with data.opd or sequence parallel")
++
+         # Context manager for sequence parallel if needed
+         context = self.sharding_manager if use_sp else nullcontext()
+         with context, torch.autocast(device_type=self.device_name, dtype=torch.bfloat16):
+@@ -373,16 +562,37 @@ class FSDPSFTTrainer:
+                 )
+                 logits = output.logits
+ 
+-                shift_logits = logits[..., :-1, :].contiguous()
+-                shift_labels = labels.contiguous()
+-                # Flatten the tokens
+-                shift_logits = shift_logits.view(-1, self.model.config.vocab_size)
+-                shift_labels = shift_labels.view(-1)
+-                # Enable model parallelism
+-                shift_labels = shift_labels.to(shift_logits.device)
+-                loss = loss_fct(shift_logits, shift_labels)
+-                loss = loss * loss_mask.to(loss.device)
++                if use_kd:
++                    # Logit distillation (local patch 8): bucketed forward KL to the
++                    # teacher's stored top-k (DistillKDDataset) replaces the CE loss.
++                    kd = [batch[x][:, :-1].to(logits.device) for x in ("kd_ids", "kd_logprobs", "kd_mask")]
++                    kl, ce = kd_token_loss(logits[:, :-1], *kd, labels,
++                                           chunk=self._kd_chunk)
++                    lm = loss_mask.to(kl.device)
++                    self._kd_stats.append(torch.stack([(ce.reshape(-1) * lm).sum(), lm.sum()]).detach())
++                    loss = kl.reshape(-1) * lm
++                else:
++                    shift_logits = logits[..., :-1, :].contiguous()
++                    shift_labels = labels.contiguous()
++                    # Flatten the tokens
++                    shift_logits = shift_logits.view(-1, self.model.config.vocab_size)
++                    shift_labels = shift_labels.view(-1)
++                    # Enable model parallelism
++                    shift_labels = shift_labels.to(shift_logits.device)
++                    loss = loss_fct(shift_logits, shift_labels)
++                    if use_opd:
++                        # Per-token CE is -log pi_theta(a_t|s_t), so the OPD
++                        # advantage A_t = log pi_T - log pi_theta (stop-gradient)
++                        # is teacher_lp + loss.detach(); the policy-gradient
++                        # surrogate -A_t * log pi_theta is then A_t * CE_t.
++                        clip = self._opd_clip
++                        teacher_lp = batch["teacher_logprobs"][:, 1:].reshape(-1).to(loss.device)
++                        advantage = (teacher_lp + loss.detach()).clamp_(-clip, clip)
++                        loss = advantage * loss
++                    loss = loss * loss_mask.to(loss.device)
+             else:
++                if use_opd:
++                    raise NotImplementedError("data.opd=True is not supported with sequence parallel")
+                 # IMPORTANT: We have a big assumption here, so we can shard the SAME sequence across SP ranks
+                 # i.e., each GPU has <1 sequence, and each SP group has 1 sequence
+                 # 1. All SP ranks will receive the *SAME* batch
+@@ -462,6 +672,7 @@ class FSDPSFTTrainer:
+         micro_batches = batch.split(self.config.data.micro_batch_size_per_gpu)
+         n_micro_batches = len(micro_batches)
+         step_loss = 0
++        self._kd_stats = []  # patch 8: (sum CE on sampled token, n tokens) per micro-batch
+         for micro_batch in micro_batches:
+             loss = self._compute_loss_and_backward(batch=micro_batch) / n_micro_batches
+             step_loss += loss.item()
+@@ -497,10 +708,18 @@ class FSDPSFTTrainer:
+         elif is_npu_available:
+             torch.distributed.all_reduce(step_loss)
+             step_loss /= self.device_mesh.size(0)
+-        return {"train/loss": step_loss.detach().item(), "train/lr(1e-3)": lr * 1e3}
++        metrics = {"train/loss": step_loss.detach().item(), "train/lr(1e-3)": lr * 1e3}
++        if self._kd_stats:
++            # data.kd: train/loss is the bucketed KL; also log the student's CE on the
++            # teacher's sampled tokens, the quantity the NTP arm's train/loss reports.
++            kd = torch.stack(self._kd_stats).sum(0)
++            torch.distributed.all_reduce(kd)
++            metrics["train/kd_ce"] = (kd[0] / kd[1].clamp(min=1)).item()
++        return metrics
+ 
+     def validation_step(self, batch: TensorDict):
+         self.fsdp_model.eval()
++        self._kd_stats = []
+         with torch.no_grad():
+             loss = self._compute_loss_and_backward(batch, do_backward=False)
+             if is_cuda_available:
+@@ -736,23 +955,48 @@ class FSDPSFTTrainer:
+                 global_step += 1
+                 data = TensorDict(data, batch_size=self.config.data.train_batch_size).to(self.device_name)
+                 metric = self.training_step(data)
+-                if rank == 0:
+-                    tracking.log(data=metric, step=global_step)
++                _mem_probe(f"after train step {global_step}")
++                if global_step == 2:
++                    _mem_probe_referrers(f"train step {global_step}")
+ 
+                 is_last_step = global_step >= self.total_training_steps
+                 is_valid_step = global_step % self.config.trainer.test_freq == 0
+                 is_save_step = global_step % self.config.trainer.save_freq == 0
+ 
++                # Throttle train-metric logging to every `logging_freq` steps
++                # (<=1 logs every step); the final step is always logged.
++                logging_freq = int(self.config.trainer.get("logging_freq", 50))
++                if rank == 0 and (is_last_step or logging_freq <= 1 or global_step % logging_freq == 0):
++                    tracking.log(data=metric, step=global_step)
++
++                # Save BEFORE the final validation pass: with save_freq=-1 the
++                # last step is the only save, and validation can be long (our
++                # SFT setup points val_files at the full train mixture), so a
++                # walltime kill mid-validation must not lose the trained model.
++                if is_last_step or (self.config.trainer.save_freq > 0 and is_save_step):
++                    self.save_checkpoint(step=global_step)
++                    _mem_probe(f"after save step {global_step}", dump=True)
++
+                 # early exit or validation step
+                 if is_last_step or (self.config.trainer.test_freq > 0 and is_valid_step):
+-                    # Perform validation
++                    # Perform validation. `trainer.max_val_batches` (optional,
++                    # <0 = no cap) bounds the pass when val_files is large.
++                    max_val_batches = int(self.config.trainer.get("max_val_batches", -1))
+                     val_losses = []
+-                    for val_data in self.val_dataloader:
++                    for val_step, val_data in enumerate(
++                        tqdm(self.val_dataloader, desc="Validation", disable=rank != 0)
++                    ):
++                        if max_val_batches >= 0 and val_step >= max_val_batches:
++                            break
+                         val_data = TensorDict(val_data, batch_size=self.config.data.micro_batch_size_per_gpu).to(
+                             self.device_name
+                         )
+                         val_loss = self.validation_step(val_data)
+                         val_losses.append(val_loss)
++                        _mem_probe(f"after val batch {val_step}", dump=val_step in (0, 10, 30))
++                        if val_step in (3, 7):
++                            _mem_probe_referrers(f"val batch {val_step}")
++                            _mem_probe(f"after gc at val batch {val_step}")
+                     if rank == 0:
+                         val_loss = torch.mean(torch.stack(val_losses))
+                         metric = {"val/loss": val_loss.detach().item()}
+@@ -760,9 +1004,6 @@ class FSDPSFTTrainer:
+                         last_valid_metric = metric
+                     torch.distributed.barrier()
+ 
+-                if is_last_step or (self.config.trainer.save_freq > 0 and is_save_step):
+-                    self.save_checkpoint(step=global_step)
+-
+                 if is_last_step:
+                     if rank == 0:
+                         print(f"Final validation metrics: {last_valid_metric}")
+diff --git a/verl/trainer/ppo/ray_trainer.py b/verl/trainer/ppo/ray_trainer.py
+index 97b68684..05477a6f 100644
+--- a/verl/trainer/ppo/ray_trainer.py
++++ b/verl/trainer/ppo/ray_trainer.py
+@@ -1375,7 +1375,17 @@ class RayPPOTrainer:
+                     self.train_dataloader.sampler.update(batch=batch)
+ 
+                 # TODO: make a canonical logger that supports various backend
+-                logger.log(data=metrics, step=self.global_steps)
++                # Throttle per-step train-metric logging to every `trainer.log_freq`
++                # steps (default 1 = stock behavior). Steps that carry validation
++                # metrics and the final step always log.
++                log_freq = int(self.config.trainer.get("log_freq", 1))
++                if (
++                    is_last_step
++                    or log_freq <= 1
++                    or self.global_steps % log_freq == 0
++                    or any(key.startswith("val") for key in metrics)
++                ):
++                    logger.log(data=metrics, step=self.global_steps)
+ 
+                 progress_bar.update(1)
+                 self.global_steps += 1
 diff --git a/verl/utils/dataset/rl_dataset.py b/verl/utils/dataset/rl_dataset.py
-index 2c19385c..dd7223d5 100644
+index 2c19385c..4985fa75 100644
 --- a/verl/utils/dataset/rl_dataset.py
 +++ b/verl/utils/dataset/rl_dataset.py
-@@ -164,7 +164,11 @@ class RLHFDataset(Dataset):
+@@ -117,6 +117,13 @@ class RLHFDataset(Dataset):
+         self.serialize_dataset = False
+         self.return_multi_modal_inputs = config.get("return_multi_modal_inputs", True)
+ 
++        if config.get("disable_chat_template", False):
++            # Scaffold-free prompt variants (data/balanced-simple* etc.): the
++            # parquet content is the exact string the model must see. Blanking
++            # the template routes every chat_template check below (incl.
++            # doc2len's overlong filter) to the raw-concatenation fallback.
++            self.tokenizer.chat_template = None
++
+         self._download()
+         self._read_files_and_tokenize()
+ 
+@@ -164,7 +171,11 @@ class RLHFDataset(Dataset):
              else:
  
                  def doc2len(doc) -> int:
@@ -47,7 +475,7 @@ index 2c19385c..dd7223d5 100644
  
              dataframe = dataframe.filter(
                  lambda doc: doc2len(doc) <= self.max_prompt_length,
-@@ -258,7 +262,12 @@ class RLHFDataset(Dataset):
+@@ -258,7 +269,12 @@ class RLHFDataset(Dataset):
                  row_dict["multi_modal_inputs"].pop("second_per_grid_ts", None)
  
          else:
@@ -100,6 +528,61 @@ index c2a75db7..7fbffb5b 100644
  
          transformer_policy = functools.partial(
              transformer_auto_wrap_policy,
+diff --git a/verl/workers/config/optimizer.py b/verl/workers/config/optimizer.py
+index 63165e7e..b8f4985f 100644
+--- a/verl/workers/config/optimizer.py
++++ b/verl/workers/config/optimizer.py
+@@ -12,7 +12,7 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
+-from dataclasses import dataclass
++from dataclasses import dataclass, field
+ from typing import Optional
+ 
+ from omegaconf import MISSING
+@@ -32,6 +32,7 @@ class OptimizerConfig(BaseConfig):
+         total_training_steps (int): Total training steps (must be overridden at runtime).
+         weight_decay (float): Weight decay factor.
+         lr_warmup_steps (Optional[int]): Number of warmup steps; None delegates to lr_warmup_steps_ratio.
++        betas (list[float]): AdamW (beta1, beta2). Defaults to [0.9, 0.999].
+     """
+ 
+     lr: float = MISSING
+@@ -39,6 +40,7 @@ class OptimizerConfig(BaseConfig):
+     total_training_steps: int = -1
+     weight_decay: float = 0.01
+     lr_warmup_steps: Optional[int] = -1
++    betas: list[float] = field(default_factory=lambda: [0.9, 0.999])
+ 
+     def __post_init__(self):
+         assert self.lr != MISSING
+diff --git a/verl/workers/fsdp_workers.py b/verl/workers/fsdp_workers.py
+index 067ac03f..278a0faf 100644
+--- a/verl/workers/fsdp_workers.py
++++ b/verl/workers/fsdp_workers.py
+@@ -748,13 +748,15 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
+ 
+         assert self._is_rollout
+ 
++        # Fall back to tokenizer when generation_config exists but the
++        # specific field is None (e.g. gemma-3-270m's generation_config.json
++        # has no eos_token_id; without this fallback, downstream code receives
++        # None and torch.tensor(None) raises "Could not infer dtype of NoneType").
++        _gc_eos = getattr(self.generation_config, "eos_token_id", None) if self.generation_config is not None else None
++        _gc_pad = getattr(self.generation_config, "pad_token_id", None) if self.generation_config is not None else None
+         meta_info = {
+-            "eos_token_id": self.generation_config.eos_token_id
+-            if self.generation_config is not None
+-            else self.tokenizer.eos_token_id,
+-            "pad_token_id": self.generation_config.pad_token_id
+-            if self.generation_config is not None
+-            else self.tokenizer.pad_token_id,
++            "eos_token_id": _gc_eos if _gc_eos is not None else self.tokenizer.eos_token_id,
++            "pad_token_id": _gc_pad if _gc_pad is not None else self.tokenizer.pad_token_id,
+         }
+         prompts.meta_info.update(meta_info)
+         timing_generate = {}
 diff --git a/verl/workers/sharding_manager/fsdp_vllm.py b/verl/workers/sharding_manager/fsdp_vllm.py
 index c9b163a0..20caa915 100644
 --- a/verl/workers/sharding_manager/fsdp_vllm.py
@@ -127,29 +610,3 @@ index c9b163a0..20caa915 100644
 +
          self.base_sync_done = True
          logger.info(f"vLLM load weights, loaded_params: {len(loaded_params) if loaded_params else -1}")
-diff --git a/verl/workers/fsdp_workers.py b/verl/workers/fsdp_workers.py
-index 067ac03f..278a0faf 100644
---- a/verl/workers/fsdp_workers.py
-+++ b/verl/workers/fsdp_workers.py
-@@ -748,13 +748,15 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
- 
-         assert self._is_rollout
- 
-+        # Fall back to tokenizer when generation_config exists but the
-+        # specific field is None (e.g. gemma-3-270m's generation_config.json
-+        # has no eos_token_id; without this fallback, downstream code receives
-+        # None and torch.tensor(None) raises "Could not infer dtype of NoneType").
-+        _gc_eos = getattr(self.generation_config, "eos_token_id", None) if self.generation_config is not None else None
-+        _gc_pad = getattr(self.generation_config, "pad_token_id", None) if self.generation_config is not None else None
-         meta_info = {
--            "eos_token_id": self.generation_config.eos_token_id
--            if self.generation_config is not None
--            else self.tokenizer.eos_token_id,
--            "pad_token_id": self.generation_config.pad_token_id
--            if self.generation_config is not None
--            else self.tokenizer.pad_token_id,
-+            "eos_token_id": _gc_eos if _gc_eos is not None else self.tokenizer.eos_token_id,
-+            "pad_token_id": _gc_pad if _gc_pad is not None else self.tokenizer.pad_token_id,
-         }
-         prompts.meta_info.update(meta_info)
-         timing_generate = {}
